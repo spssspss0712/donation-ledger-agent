@@ -18,6 +18,8 @@ ignore = ["S101"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["S105", "S106", "S608"]
+# Console demo script: long literal SQL/print lines are clearer unwrapped.
+"donation_ledger/demo.py" = ["E501", "S608"]
 
 [tool.mypy]
 python_version = "3.12"

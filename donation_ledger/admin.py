@@ -45,16 +45,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         engine = make_engine(Settings.from_env().database_url)
     except ConfigError as exc:
-        print(f"configuration error: {exc}", file=sys.stderr)  # noqa: T201
+        print(f"configuration error: {exc}", file=sys.stderr)
         return 1
     if args.cmd == "list-rejected":
         for r in list_rejected(engine, include_closed=args.all):
             # No raw row here: it contains donor details. Query the table if you need it.
-            print(f"{r.id}\t{r.status}\t{r.source}\t{r.external_id or '-'}\t{r.reason}")  # noqa: T201
+            print(f"{r.id}\t{r.status}\t{r.source}\t{r.external_id or '-'}\t{r.reason}")
         return 0
     status = "ignored" if args.cmd == "ignore-rejected" else "open"
     if not set_status(engine, args.id, status):
-        print("no such rejected row", file=sys.stderr)  # noqa: T201
+        print("no such rejected row", file=sys.stderr)
         return 1
     return 0
 
