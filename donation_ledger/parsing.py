@@ -221,6 +221,16 @@ def is_visually_empty(text: str) -> bool:
     return all(ch.isspace() or unicodedata.category(ch) == "Cf" for ch in text)
 
 
+def strip_invisible(text: str) -> str:
+    """Strip whitespace and invisible format chars (ZWSP, ...) from both ends."""
+    start, end = 0, len(text)
+    while start < end and (text[start].isspace() or unicodedata.category(text[start]) == "Cf"):
+        start += 1
+    while end > start and (text[end - 1].isspace() or unicodedata.category(text[end - 1]) == "Cf"):
+        end -= 1
+    return text[start:end]
+
+
 def has_nul(text: str) -> bool:
     return "\x00" in text
 
@@ -241,6 +251,8 @@ def minor_units_from_decimal_string(text: str, currency: str) -> int:
         raise RowError("invalid_amount: not a plain positive number")
     exponent = exponent_for(currency)
     frac = match.group("frac") or ""
+    if len(match.group("int")) > 25:  # before Decimal/int: huge digit strings are quadratic
+        raise RowError("invalid_amount: implausibly large")
     if len(frac) > exponent:
         raise RowError(f"invalid_amount: more than {exponent} decimal places for {currency}")
     try:
@@ -256,7 +268,7 @@ def minor_units_from_decimal_string(text: str, currency: str) -> int:
 
 
 def normalize_currency(text: str) -> str:
-    raw = text.strip()
+    raw = strip_invisible(text)
     if raw == "":
         return "USD"
     # Check ASCII before upper(): "\u0131nr".upper() == "INR" would "fix" garbage silently.
@@ -270,7 +282,7 @@ def normalize_donor_name(text: str) -> str | None:
     """Return None for anonymous donors; "Anonymous" is never stored."""
     if has_nul(text):
         raise RowError("invalid_text: contains NUL character")
-    name = " ".join(text.split())
+    name = " ".join(strip_invisible(text).split())
     if is_visually_empty(name) or name.casefold() == "anonymous":
         return None
     if len(name) > MAX_NAME_LEN:

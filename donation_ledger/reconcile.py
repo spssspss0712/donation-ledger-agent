@@ -130,8 +130,10 @@ def _process(session: Session, batch: Sequence[Mapping[str, Any]], run_id: int) 
     for pi in batch:
         mapped = map_payment_intent(pi)
         if isinstance(mapped, Rejection):
-            record_rejection(session, mapped, run_id)
-            c.rows_quarantined += 1
+            if record_rejection(session, mapped, run_id) == "ignored":
+                c.rows_ignored += 1
+            else:
+                c.rows_quarantined += 1
         elif mapped.external_id in seen:
             c.rows_duplicate_skipped += 1  # same PI listed twice in one batch
         else:

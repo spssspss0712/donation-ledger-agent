@@ -8,7 +8,8 @@ from pathlib import Path
 from donation_ledger.sources.base import SheetReadError, SheetTable
 
 # The csv default (128 KB) would abort the whole file on one huge cell; oversized values
-# are quarantined later by field-length checks instead.
+# are quarantined later by field-length checks. A single cell above 10 MB still fails the
+# run (documented limitation; Google cells are capped far lower).
 csv.field_size_limit(10_000_000)
 
 

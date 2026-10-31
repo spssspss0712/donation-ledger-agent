@@ -374,3 +374,84 @@ def test_invisible_only_names_are_treated_as_anonymous() -> None:
     assert normalize_donor_name("​​") is None
     result = map_payment_intent(payment_intent(metadata={"donor_name": "​"}))
     assert isinstance(result, NewDonation) and result.donor_name is None
+
+
+def test_invisible_characters_cannot_disguise_ids_names_or_currencies(engine: Engine) -> None:
+    from donation_ledger.sync import run_sync
+    from tests.test_sync import TZ, ListReader, good
+
+    zw = "​"
+    data = [
+        good("1001", name="Bob"),
+        good("1001" + zw, name="Bob"),  # same ID once invisible chars are ignored
+        good(zw),  # "blank" ID
+        good("2002", name="Anonymous" + zw),
+        ["3003", "2024-03-01", "N", "", "5", zw, ""],  # invisible currency -> default USD
+    ]
+    run_sync(engine, ListReader(data), TZ)
+    assert rows(engine, "SELECT external_id, donor_name, currency FROM donations ORDER BY 1") == [
+        ("2002", None, "USD"),
+        ("3003", "N", "USD"),
+    ]
+    assert rows(engine, "SELECT count(*) FROM rejected_rows") == [(3,)]
+
+
+def test_absurdly_long_amount_digit_strings_are_rejected_quickly() -> None:
+    import time
+
+    from donation_ledger.parsing import RowError, minor_units_from_decimal_string
+
+    start = time.monotonic()
+    with pytest.raises(RowError):
+        minor_units_from_decimal_string("1" * 900_000, "USD")
+    assert time.monotonic() - start < 1
+
+
+def test_duplicate_extra_header_names_keep_both_columns(engine: Engine) -> None:
+    from donation_ledger.sync import run_sync
+    from tests.test_sync import HEADER, TZ, ListReader, good
+
+    run_sync(engine, ListReader([[*good("H1"), "n1", "n2"]], header=[*HEADER, "Note", "Note"]), TZ)
+    assert rows(
+        engine, "SELECT jsonb_object_keys(raw_payload->'extra') FROM donations ORDER BY 1"
+    ) == [
+        ("Note",),
+        ("Note_9",),
+    ]
+
+
+def test_ignored_stripe_rejection_is_counted_as_ignored_by_reconcile(engine: Engine) -> None:
+    from datetime import timedelta
+
+    from donation_ledger.reconcile import run_reconcile
+
+    class One:
+        def list_since(self, created_gte: Any) -> Any:
+            return [payment_intent("pi_BADIGN", amount=0)]
+
+    run_reconcile(engine, One(), timedelta(hours=1))
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE rejected_rows SET status='ignored'"))
+    res = run_reconcile(engine, One(), timedelta(hours=1))
+    assert (res.counters.rows_ignored, res.counters.rows_quarantined) == (1, 0)
+    assert rows(engine, "SELECT attempts FROM rejected_rows") == [(2,)]
+
+
+def test_alembic_works_from_any_working_directory(tmp_path: Any) -> None:
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    from tests.conftest import database_url_for_tests
+
+    url = database_url_for_tests().rsplit("/", 1)[0] + "/ledger_demo"
+    ini = Path("alembic.ini").resolve()
+    env = {**os.environ, "DATABASE_URL": url, "PYTHONPATH": str(Path.cwd())}
+    proc = subprocess.run(  # noqa: S603
+        [sys.executable, "-m", "alembic", "-c", str(ini), "current"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+    )
+    assert proc.returncode == 0, proc.stderr.decode()[-400:]

@@ -102,6 +102,11 @@ See `DECISIONS.md` for the full list. The main ones: full comparison every run (
 - Stripe `raw_payload` is stored verbatim, so a donor literally named "Anonymous" in Stripe metadata appears there (the `donor_name` column is still NULL).
 - The word "Anonymous" is scrubbed from stored data only where it is a donor name (sheet `Donor Name`, any Stripe string value equal to it); in other columns (address, recipient, extra columns) it is stored as written. In Stripe, a billing name of "Anonymous" is blanked before name fallbacks run, so metadata/shipping names may then be used.
 - A CSV row with an unterminated quote swallows the following lines (CSV limitation).
+- The Google reader returns *formatted* cell text, so the spreadsheet's locale matters: dates must read `M/D/YYYY` or ISO and amounts must use `.` for decimals (a UK/EU-locale sheet would be misread). Unverified against a real sheet.
+- A single CSV cell above 10 MB fails the whole CSV run.
+- A run skipped because another holds the lock is recorded with status `failed` (error text says why); alert on the latest *non-skipped* run.
+- A Stripe payment is dated by the PaymentIntent `created` time, not the time it succeeded.
+- Rejected Stripe payments stay `open` until ignored (no automatic "absent" state), and a webhook and reconcile may each record one entry for the same bad payment.
 - Two byte-identical bad rows (same cells, no distinguishing ID) share one `rejected_rows` entry.
 - The real Google Sheets reader and the real Stripe listing client were never run against the real services.
 - No authentication on the webhook other than the Stripe signature; no rate limiting.

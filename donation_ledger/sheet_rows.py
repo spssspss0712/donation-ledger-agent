@@ -20,6 +20,7 @@ from donation_ledger.parsing import (
     normalize_currency,
     normalize_donor_name,
     parse_sheet_datetime,
+    strip_invisible,
 )
 from donation_ledger.sources.base import SheetTable
 
@@ -89,22 +90,27 @@ def classify_table(
 ) -> list[Classified]:
     mapping = map_header(table.header)
     width = len(table.header)
-    header_names = [_safe_cell(h.strip()) or f"column_{i + 1}" for i, h in enumerate(table.header)]
+    header_names: list[str] = []
+    for i, h in enumerate(table.header):
+        name = _safe_cell(h.strip()) or f"column_{i + 1}"
+        while name in header_names:  # keep both columns of a duplicated extra header
+            name += f"_{i + 1}"
+        header_names.append(name)
     parsed: list[tuple[int, list[str], dict[str, Any]]] = []
     for offset, cells in enumerate(table.rows):
         number = offset + 2  # sheet row number: header is row 1
-        if all(not c.strip() for c in cells):
+        if all(not strip_invisible(c) for c in cells):
             continue  # fully blank spacer rows are not data
         raw = {name: _safe_cell(cells[i]) for i, name in enumerate(header_names) if i < len(cells)}
         name_header = header_names[mapping["donor_name"]]
-        if raw.get(name_header, "").strip().casefold() == "anonymous":
+        if strip_invisible(raw.get(name_header, "")).casefold() == "anonymous":
             # The word "Anonymous" must never be stored, not even inside raw payloads.
             raw[name_header] = ""
         parsed.append((number, list(cells), raw))
     id_counts = Counter(
-        cells[mapping["entry_id"]].strip()
+        _safe_cell(strip_invisible(cells[mapping["entry_id"]]))
         for _, cells, _ in parsed
-        if len(cells) > mapping["entry_id"] and cells[mapping["entry_id"]].strip()
+        if len(cells) > mapping["entry_id"] and strip_invisible(cells[mapping["entry_id"]])
     )
     out: list[Classified] = []
     for number, cells, raw in parsed:
@@ -136,8 +142,8 @@ def _classify_row(
         i = mapping[field]
         return cells[i] if i < len(cells) else ""
 
-    entry_id = _safe_cell(cell("entry_id").strip())
-    if len(cells) > width and any(c.strip() for c in cells[width:]):
+    entry_id = _safe_cell(strip_invisible(cell("entry_id")))
+    if len(cells) > width and any(strip_invisible(c) for c in cells[width:]):
         return reject("malformed_row: more cells than header columns", entry_id)
     if any(has_nul(c) for c in cells):
         return reject("invalid_text: contains NUL character", entry_id)
@@ -149,7 +155,7 @@ def _classify_row(
         return reject(
             f"duplicate_entry_id: appears {id_counts[entry_id]} times in the sheet", entry_id
         )
-    fields = {f: _safe_cell(cell(f).strip()) for f in REQUIRED_COLUMNS}
+    fields = {f: _safe_cell(strip_invisible(cell(f))) for f in REQUIRED_COLUMNS}
     if fields["donor_name"].casefold() == "anonymous":
         fields["donor_name"] = ""
     result = _build_donation(entry_id, fields, raw, number, tz_name, now)
