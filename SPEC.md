@@ -1,274 +1,274 @@
 # SPEC: donation-ledger
 
-这是给 agent 的完整说明。请先通读全文，再开始工作。说明用中文写成；代码、注释、提交信息和 README 一律用英文。
+This is the complete specification for the agent. Read it in full before you start working. Code, comments, commit messages, and the README must all be written in English.
 
 ---
 
-## 1. 任务和成功标准
+## 1. Task and success criteria
 
-**任务：** 在这个空仓库里从零构建 `donation-ledger`，一个后端服务，把两个来源的捐款（Stripe webhook 和 Google Sheet）写入同一个数据库，保证数据完整、不重复、干净，并且任何一步失败后都能安全恢复。
+**Task:** Build `donation-ledger` from scratch in this empty repository. It is a backend service that writes donations from two sources (Stripe webhooks and a Google Sheet) into one database, keeping the data complete, free of duplicates, and clean, and recovering safely when any step fails.
 
-**一句话背景：** 这是一家非营利组织的捐款管理后端，由一个志愿者工程师维护，所以要简单、可靠、容易接手。
+**Context in one sentence:** This is the donation-management backend for a nonprofit, maintained by a volunteer engineer, so it must be simple, reliable, and easy to take over.
 
-**优先级：** 正确性 大于 可恢复性 大于 可读性和文档 大于 功能范围。永远不要为了多做功能而牺牲正确性。
+**Priorities:** Correctness over recoverability, over readability and documentation, over feature scope. Never sacrifice correctness to add features.
 
-**完成的定义（全部满足才算完成）：**
+**Definition of done (all items must be satisfied):**
 
-1. 第 2 节的每一条需求都有对应的自动化测试，且全部通过。
-2. CI 在干净环境（包含真实的 PostgreSQL）中全绿。
-3. 离线演示脚本能从零跑通。
-4. `README.md`、`DECISIONS.md`、`EXPERIMENT_REPORT.md` 齐全，且和代码一致。
-5. 用一个全新的克隆，只按 README 操作，就能把测试跑通。
-6. 你已经完成第 5 节的对抗式自查，并且连续两轮没有再发现新的问题。
+1. Every requirement in section 2 has a corresponding automated test, and all tests pass.
+2. CI is green in a clean environment, including a real PostgreSQL.
+3. The offline demo script runs from scratch.
+4. `README.md`, `DECISIONS.md`, and `EXPERIMENT_REPORT.md` are complete and consistent with the code.
+5. From a fresh clone, following only the README, the tests pass.
+6. You have completed the adversarial self-review in section 5 and found nothing new in two consecutive rounds.
 
-**重要：**
+**Important:**
 
-- 你的交付会用一组你没见过的额外场景评估，所以不要只满足上面的清单，要主动考虑各种异常情况。
-- 没做完就写清楚没做完，不要假装完成。诚实的报告比漂亮的报告重要得多。
+- Your delivery will be evaluated against additional scenarios you have not seen. Do not only satisfy the list above; actively think about failure cases.
+- If something is not finished, say so clearly. Do not pretend it is done. An honest report matters far more than a polished one.
 
 ---
 
-## 2. 业务背景和需求
+## 2. Business context and requirements
 
-### 2.1 场景
+### 2.1 Scenario
 
-非营利组织的网站通过 Stripe 接收捐款。另外有工作人员在 Google Sheet 里手动录入其他来源的捐款（现场、支票等）。两个来源的字段不完全一样。系统要把两边的捐款都写进同一个数据库：Stripe 这边实时写入，Sheet 这边每天定时同步新增的内容。网络出问题、定时任务失败、请求重复送达等情况下，数据仍然必须完整、没有重复、干净。
+A nonprofit's website accepts donations through Stripe. In addition, staff manually enter other donations (in person, checks, and so on) into a Google Sheet. The fields of the two sources are not identical. The system must write donations from both sources into one database: the Stripe side in real time, and the Sheet side through a daily scheduled sync of new entries. Under network problems, scheduled-job failures, and duplicate deliveries, the data must still be complete, free of duplicates, and clean.
 
-### 2.2 两个来源的字段
+### 2.2 Fields of the two sources
 
-| 来源 | 有的字段 | 没有的字段 |
+| Source | Fields it has | Fields it lacks |
 | --- | --- | --- |
-| Stripe | 支付 ID（`pi_` 开头）、金额（最小货币单位）、货币、创建时间（Unix 时间戳）、捐款人姓名和邮箱（可能有，可能没有） | 地址、接收人 |
-| Google Sheet | `Entry ID`、`Date`、`Donor Name`（可空）、`Donor Address`、`Amount`、`Currency`（可空，默认 USD）、`Recipient` | 邮箱、支付 ID |
+| Stripe | Payment ID (starts with `pi_`), amount (smallest currency unit), currency, creation time (Unix timestamp), donor name and email (may or may not be present) | Address, recipient |
+| Google Sheet | `Entry ID`, `Date`, `Donor Name` (may be blank), `Donor Address`, `Amount`, `Currency` (may be blank, defaults to USD), `Recipient` | Email, payment ID |
 
-你需要查阅 Stripe 和 Google 的官方文档，确认 Stripe 事件对象的真实结构和签名算法，不要凭记忆猜。
+Consult the official Stripe and Google documentation to confirm the real structure of Stripe event objects and the signature algorithm. Do not guess from memory.
 
-### 2.3 已经明确的决定（不要自己重新定）
+### 2.3 Decisions already made (do not re-decide)
 
-以下是容易模糊的地方，已经给出明确规定。如果你认为某条规定有问题，先按规定执行，再把你的理由写进 `DECISIONS.md`。
+These are the places that are easy to leave ambiguous, and they have been decided explicitly. If you think a rule is wrong, follow it anyway and write your reasoning in `DECISIONS.md`.
 
-| 主题 | 规定 |
+| Topic | Rule |
 | --- | --- |
-| 统一表 | 一张 `donations` 表，两个来源都写进这里。必须包含 `source`、`external_id`、捐款人姓名、邮箱、地址、接收人、金额、货币、捐款时间、`is_anonymous`、`raw_payload`、`created_at` |
-| 去重 | 对 `(source, external_id)` 建数据库唯一约束。不允许只靠"先查再插入"，因为会有并发竞态 |
-| Stripe 的外部 ID | 用 payment intent 的 ID（`pi_...`）。同一笔捐款无论触发几次事件，都只有一条记录 |
-| Sheet 的外部 ID | `Entry ID` 列，假设它稳定且唯一。`Entry ID` 为空或重复的行一律隔离，不写入 |
-| 金额 | 用整数最小货币单位存储（美元分），绝不用浮点数。Sheet 的金额可能是 `1000`、`1,000.50`、`$1,000.50` 等格式，都要解析。解析不了、为零或为负数的行隔离 |
-| 货币 | 大写 ISO 4217 代码。Sheet 没填默认 USD。不做汇率换算 |
-| 时间 | 数据库存 UTC。Sheet 的日期按环境变量 `SHEET_TIMEZONE`（默认 `America/Los_Angeles`）解释 |
-| 匿名 | Sheet 的 `Donor Name` 为空或是 anonymous（不区分大小写），或 Stripe 没有姓名时，存 `donor_name = NULL` 且 `is_anonymous = true`。"Anonymous"只在展示层出现，不存进数据库 |
-| 重复送达 | 同一个事件或同一行任意次数送达，结果和送达一次完全一样，且 webhook 仍返回 2xx |
-| 已同步的记录被上游修改 | 账本只追加。Sheet 里已同步的行后来改了内容，不修改数据库，只记录一条"同步后被修改"的告警（进 `sync_issues`） |
-| Sheet 中被删除的行 | 忽略，不删除数据库记录 |
-| 退款和争议 | 不在范围内。遇到不认识的 Stripe 事件类型要返回 2xx 并记录日志，不写入表，也不报错 |
-| 隔离的行 | 写进 `rejected_rows` 表：来源、外部 ID（如果有）、原始行、原因、同步记录 ID。下次同步会重新尝试，直到通过或被人工标记为忽略。隔离的行不能因为"上次同步到哪里"而永远被跳过 |
+| Unified table | One `donations` table that both sources write to. It must include `source`, `external_id`, donor name, email, address, recipient, amount, currency, donation time, `is_anonymous`, `raw_payload`, and `created_at` |
+| Deduplication | Add a database unique constraint on `(source, external_id)`. Do not rely only on "check, then insert", because that has a concurrency race |
+| Stripe external ID | Use the payment intent ID (`pi_...`). However many events one donation triggers, there is exactly one record |
+| Sheet external ID | The `Entry ID` column, assumed stable and unique. Rows whose `Entry ID` is empty or duplicated are always quarantined and not written to `donations` |
+| Amount | Store as an integer in the smallest currency unit (US cents). Never use floating point. Sheet amounts may look like `1000`, `1,000.50`, or `$1,000.50`; all must be parsed. Rows that cannot be parsed, or are zero or negative, are quarantined |
+| Currency | Uppercase ISO 4217 code. If the Sheet leaves it blank, default to USD. No currency conversion |
+| Time | Store UTC in the database. Interpret Sheet dates using the environment variable `SHEET_TIMEZONE` (default `America/Los_Angeles`) |
+| Anonymous | If the Sheet's `Donor Name` is blank or is "anonymous" (case-insensitive), or Stripe has no name, store `donor_name = NULL` and `is_anonymous = true`. The word "Anonymous" appears only in the presentation layer and is never stored in the database |
+| Duplicate delivery | The same event or the same row delivered any number of times gives exactly the same result as delivering it once, and the webhook still returns 2xx |
+| Synced record changed upstream | The ledger is append-only. If a row already synced from the Sheet is later edited, do not modify the database; only record a "changed after sync" warning (in `sync_issues`) |
+| Rows deleted from the Sheet | Ignore them. Do not delete database records |
+| Refunds and disputes | Out of scope. For unrecognized Stripe event types, return 2xx and log them; do not write to any table and do not raise an error |
+| Quarantined rows | Write them to a `rejected_rows` table: source, external ID (if any), the raw row, the reason, and the sync run ID. They are retried on the next sync until they pass or are manually marked as ignored. A quarantined row must never be skipped forever because of a "last synced position" |
 
-### 2.4 功能需求
+### 2.4 Functional requirements
 
-**数据库：**
+**Database:**
 
-- 表：`donations`、`sync_runs`、`rejected_rows`、`sync_issues`。用 Alembic 管理迁移。
-- `sync_runs` 至少包含：ID、来源、开始时间、结束时间、状态（running、succeeded、failed、partial）、读取行数、新增行数、重复跳过行数、隔离行数、错误信息。
+- Tables: `donations`, `sync_runs`, `rejected_rows`, `sync_issues`. Manage migrations with Alembic.
+- `sync_runs` contains at least: ID, source, start time, end time, status (running, succeeded, failed, partial), rows read, rows inserted, duplicate rows skipped, rows quarantined, error message.
 
-**Stripe webhook：** `POST /webhooks/stripe`
+**Stripe webhook:** `POST /webhooks/stripe`
 
-- 先验证签名，签名错误或缺失返回 400 且不写入。
-- 关注 `payment_intent.succeeded` 事件。
-- 写入成功或已存在都返回 2xx；数据库写入失败返回 5xx，让 Stripe 自动重试。
-- 必须读取原始请求体来验证签名，不能先解析再重新序列化。
+- Verify the signature first. Return 400 and write nothing if the signature is wrong or missing.
+- Handle the `payment_intent.succeeded` event.
+- Return 2xx when the write succeeds or the record already exists. Return 5xx when the database write fails, so that Stripe retries automatically.
+- You must verify the signature against the raw request body. Do not parse and re-serialize first.
 
-**Stripe 对账任务：** 定期用 Stripe API 拉取最近的 payment intents，把 webhook 漏掉的补进来。为它定义一个可以被测试的接口，不要在测试里真正访问 Stripe。
+**Stripe reconciliation job:** Periodically pull recent payment intents through the Stripe API and add any that the webhook missed. Define an interface for it that can be tested. Tests must not call Stripe for real.
 
-**Google Sheet 同步：** 命令行入口 `python -m donation_ledger.sync`，由外部定时器触发。
+**Google Sheet sync:** Command-line entry point `python -m donation_ledger.sync`, triggered by an external scheduler.
 
-- 每批写入在一个数据库 transaction 内，失败整批回滚。
-- 防止同时跑两个同步任务（用锁或者锁记录）。
-- 任何时候重跑都必须正确。用"上次同步到哪里"或"每次全量比对"都可以，由你选，但要在 `DECISIONS.md` 里说明取舍。
-- 读取 Sheet 的部分放在一个接口后面，提供 CSV 实现用于离线和测试，以及真实的 Google Sheets 实现（没有密钥时只需写好、不需要验证，并标清楚"未验证"）。
+- Each batch is written inside one database transaction, and the whole batch rolls back on failure.
+- Prevent two sync jobs from running at the same time (a lock or a lock record).
+- A rerun must be correct at any time. Either a "last synced position" or a "full comparison every run" is acceptable. You choose, but explain the trade-off in `DECISIONS.md`.
+- Put the code that reads the Sheet behind an interface. Provide a CSV implementation for offline use and tests, and a real Google Sheets implementation (without credentials it only needs to be written, not verified, and must be clearly marked "unverified").
 
-**只读 API：** `GET /donations`（分页，可按来源过滤，匿名捐款人显示为 Anonymous）、`GET /sync-runs`、`GET /health`。
+**Read-only API:** `GET /donations` (paginated, filterable by source, anonymous donors shown as Anonymous), `GET /sync-runs`, `GET /health`.
 
-**可观测性：** 结构化日志（JSON）。日志里不要输出完整的捐款人个人信息和任何密钥。
-
----
-
-## 3. 技术和工程约束
-
-**技术栈（固定，不要更换）：**
-
-- Python 3.12 或更新。FastAPI。SQLAlchemy 2.x（类型注解风格的模型）。Alembic。Pydantic。pytest。
-- 数据库是 PostgreSQL。本地开发可以用 SQLite 加快速度，但**所有测试和 CI 必须在真实的 PostgreSQL 上通过**，因为唯一约束、并发和 transaction 的行为和 SQLite 不一样。
-- Stripe 用官方 Python SDK。Google Sheets 用 `gspread` 或官方客户端。
-- 依赖要锁定版本，尽量少，每加一个依赖都要在 `DECISIONS.md` 里说明理由。
-- 不要引入队列系统、消息中间件、缓存、ORM 以外的框架。这是一个简单的项目，简单就是要求。
-
-**测试：**
-
-- 测试里不连真实的 Stripe 和 Google，只在这两个外部边界用假实现。**不要 mock 被测试的逻辑本身**，比如不要 mock 数据库来测去重，必须用真实数据库。
-- 并发去重的测试必须用真实的多线程或多进程并发写入。
-- 故障注入测试：同步过程中故意在中途抛错、模拟数据库连接断开，然后重跑，验证最终数据正确。
-- 每个测试名字要说清楚它在验证什么行为。
-- **禁止为了让测试通过而删除测试、改弱断言、写死结果。** 测试失败时修代码，除非测试本身的期望是错的，并且要在 `DECISIONS.md` 里说明。
-
-**CI：** GitHub Actions，包含 PostgreSQL service container，运行测试、lint（ruff）和类型检查。
-
-**安全：**
-
-- 密钥只通过环境变量读取，提供 `.env.example`，`.env` 加入 `.gitignore`。**任何密钥都不能提交到仓库，包括测试用的假密钥也要明显标成假的。**
-- webhook 必须验证签名。
-- 日志和错误信息不输出密钥和完整的个人信息。
-- 依赖要检查已知漏洞。
-
-**代码风格：**
-
-- 全部类型注解。函数小而明确。业务逻辑和框架、外部服务分开。
-- 注释只写"为什么"，不写"是什么"。
-- 代码、注释、提交信息、README 全部用英文。
+**Observability:** Structured (JSON) logs. Do not log full donor personal information or any secret.
 
 ---
 
-## 4. 资源和权限
+## 3. Technical and engineering constraints
 
-工作分三个阶段。**阶段 A 不需要任何密钥，必须完整完成。** 阶段 B 和 C 只在对应资源被提供时才做。
+**Tech stack (fixed, do not change):**
 
-| 阶段 | 内容 | 需要的资源 |
+- Python 3.12 or newer. FastAPI. SQLAlchemy 2.x (typed-annotation style models). Alembic. Pydantic. pytest.
+- The database is PostgreSQL. You may use SQLite locally for speed, but **all tests and CI must pass on a real PostgreSQL**, because unique constraints, concurrency, and transactions behave differently from SQLite.
+- Use the official Stripe Python SDK. Use `gspread` or the official client for Google Sheets.
+- Pin dependency versions and keep dependencies few. Justify every added dependency in `DECISIONS.md`.
+- Do not introduce queue systems, message brokers, caches, or frameworks beyond the ORM. This is a simple project, and simple is the requirement.
+
+**Testing:**
+
+- Tests must not connect to the real Stripe or Google; use fakes only at those two external boundaries. **Do not mock the logic under test.** For example, do not mock the database to test deduplication; use a real database.
+- Concurrent-deduplication tests must use real multi-threaded or multi-process concurrent writes.
+- Fault-injection tests: deliberately raise an error midway through a sync, simulate a dropped database connection, then rerun and verify the final data is correct.
+- Every test name must say what behavior it verifies.
+- **Never delete a test, weaken an assertion, or hardcode a result to make a test pass.** When a test fails, fix the code, unless the test's own expectation is wrong, in which case say so in `DECISIONS.md`.
+
+**CI:** GitHub Actions with a PostgreSQL service container, running the tests, lint (ruff), and type checking.
+
+**Security:**
+
+- Read secrets only from environment variables. Provide `.env.example` and add `.env` to `.gitignore`. **No secret may be committed to the repository, and even fake secrets used in tests must be clearly marked as fake.**
+- The webhook must verify signatures.
+- Logs and error messages must not contain secrets or full personal information.
+- Check dependencies for known vulnerabilities.
+
+**Code style:**
+
+- Full type annotations. Small, clear functions. Keep business logic separate from the framework and external services.
+- Comments explain "why", not "what".
+- Code, comments, commit messages, and the README are all in English.
+
+---
+
+## 4. Resources and permissions
+
+The work has three phases. **Phase A needs no credentials and must be fully completed.** Phases B and C are done only when the corresponding resources are provided.
+
+| Phase | Content | Resources needed |
 | --- | --- | --- |
-| A：离线完整版 | 所有功能、所有测试、CI、文档、离线演示 | 只需要运行环境和指定仓库的 push 权限 |
-| B：真实接入 | 用 Stripe test mode 和真实 Google Sheet 验证一遍 | Stripe 测试密钥和 webhook 签名密钥；Google 服务账号和示例表格 |
-| C：部署 | 部署到 Render，定时任务真实运行 | Render 账号访问权限 |
+| A: offline complete version | All features, all tests, CI, documentation, offline demo | Only a runtime environment and push access to the designated repository |
+| B: real integration | Verify once against Stripe test mode and a real Google Sheet | Stripe test key and webhook signing secret; a Google service account and a sample spreadsheet |
+| C: deployment | Deploy to Render and run the scheduled job for real | Access to a Render account |
 
-### 你可以自己做的
+### What you can do yourself
 
-- 安装 Python 依赖、运行本地 PostgreSQL（用任何可用的方式）、运行测试。
-- 查阅公开文档（Stripe、Google、FastAPI、SQLAlchemy、PostgreSQL、GitHub Actions）。
-- 在指定仓库里建分支、提交、推送。
+- Install Python dependencies, run a local PostgreSQL (by any available means), and run tests.
+- Read public documentation (Stripe, Google, FastAPI, SQLAlchemy, PostgreSQL, GitHub Actions).
+- Create branches, commit, and push in the designated repository.
 
-### 没有密钥时的离线替代方案
+### Offline substitutes when no credentials are available
 
-- **Stripe：** 用官方文档里的签名算法自己生成带有有效 `Stripe-Signature` 的假事件（格式：`t=<时间戳>,v1=<HMAC-SHA256(密钥, "<时间戳>.<原始请求体>")>`，具体以官方文档为准），用 SDK 的 `Webhook.construct_event` 验证。这样签名验证完全可以离线测试。
-- **Stripe 对账：** 把"拉取最近的 payment intents"放在一个接口后面，用假实现测试。真实实现没有密钥时写好即可，标明"未在真实环境验证"。
-- **Google Sheet：** 用 CSV 文件实现同一个接口，提供一个带有各种坏数据的示例 CSV（空名字、金额格式不一、重复的 `Entry ID`、缺失的 `Entry ID`、负数金额等）。
-- **部署：** 只需要写好部署配置和说明，不需要真的部署。
+- **Stripe:** Use the signature algorithm in the official documentation to generate fake events with a valid `Stripe-Signature` (format: `t=<timestamp>,v1=<HMAC-SHA256(secret, "<timestamp>.<raw request body>")>`; the official documentation is authoritative), and verify them with the SDK's `Webhook.construct_event`. This lets signature verification be tested fully offline.
+- **Stripe reconciliation:** Put "fetch recent payment intents" behind an interface and test it with a fake. Without credentials, the real implementation only needs to be written and marked "not verified in a real environment".
+- **Google Sheet:** Implement the same interface with a CSV file. Provide a sample CSV with a variety of bad data (blank names, inconsistent amount formats, duplicate `Entry ID`s, missing `Entry ID`s, negative amounts, and so on).
+- **Deployment:** Only the deployment configuration and instructions need to be written; no actual deployment is needed.
 
-### 不要做的事
+### What not to do
 
-- 不要尝试自己注册账号、申请密钥、绕过认证。
-- **不要使用任何 Stripe live 密钥**，只允许 `sk_test_` 开头的测试密钥。如果你发现环境里有 `sk_live_` 开头的密钥，立即停止，写入 `BLOCKERS.md`。
-- 不要访问包仓库和官方文档之外的服务。
-- 不要修改指定仓库之外的任何文件或仓库。
+- Do not try to register accounts, obtain credentials, or bypass authentication.
+- **Never use any Stripe live key.** Only test keys starting with `sk_test_` are allowed. If you find a key starting with `sk_live_` in the environment, stop immediately and write it to `BLOCKERS.md`.
+- Do not access any service other than package registries and official documentation.
+- Do not modify any file or repository outside the designated repository.
 
-### 验证必须诚实
+### Verification must be honest
 
-在 `EXPERIMENT_REPORT.md` 里用一张表列出每一项功能的验证状态：**自动化测试验证、真实环境验证、只写了代码未验证**。没有在真实环境里跑过的，不能写成已验证。
-
----
-
-## 5. 自主工作协议
-
-你要尽可能独立完成整个项目，不要为了小事停下来问。下面是你的工作方式。
-
-### 5.1 工作循环
-
-1. **先计划。** 读完整个 `SPEC.md`，写 `PLAN.md`：里程碑、每个里程碑的验收、你预见的风险、要写的测试清单。
-2. **测试先行、小步前进。** 每个功能先写会失败的测试，确认失败原因正确，再写实现。
-3. **每次改动后跑全部测试。** 绿了再提交。提交要小、频繁，提交信息用英文。
-4. **每个里程碑结束时** 更新 `PROGRESS.md`（完成了什么、测试结果、下一步、已知问题）。
-5. **功能完成后进入对抗式自查**（见 5.4）。
-6. **最后做冷启动检查：** 全新克隆，只按 README 操作，测试和演示都得跑通。
-
-### 5.2 决策权
-
-**你可以自己决定：** 库的选择（在第 3 节约束内）、文件和模块结构、命名、表的细节、测试策略、"高水位还是全量比对"这类实现选择。
-
-**每个决定都要记到 `DECISIONS.md`：** 背景、考虑过的选项、选了什么、为什么、以后好不好改。
-
-**遇到下面的情况，停下来写入 `BLOCKERS.md`，然后继续做不受影响的部分：**
-
-- 需要你没有的密钥、账号或付费服务。
-- 需求自相矛盾，而且影响钱或数据正确性。
-- 需要删除、覆盖仓库之外的东西。
-- 任何涉及真实金钱或 live 环境的操作。
-
-如果没有人能即时回答，选最安全、最保守的假设继续，并在 `BLOCKERS.md` 里标出这是假设。
-
-### 5.3 禁止事项
-
-- 不要删除或改弱测试来让它通过。
-- 不要针对测试写死结果。
-- 不要 mock 被测试的逻辑本身。
-- 不要提交任何密钥。
-- 不要 force push，不要改写已推送的历史。
-- 不要报告你没有真正运行过的结果。"我认为能跑"不等于"我跑过了"。
-- 不要为了看起来完成而忽略边缘情况。
-
-### 5.4 对抗式自查
-
-你对自己刚写的东西容易有偏见，所以要主动挑毛病。功能完成后，进行至少两轮：
-
-1. **让一个独立的审查 subagent 来审查。** 它只看 `SPEC.md` 和代码，不看你的思考过程，目标是找出让数据重复、丢失、错误或者卡死的路径。
-2. **自己写"专门打破自己"的测试。** 例如：同一事件并发送达、同步到一半进程被杀、金额各种奇怪格式、空值和超长字符串、重复的 `Entry ID`、时区边界、表格列名被改、Stripe 事件乱序到达、同一笔捐款触发多个事件。
-3. 把找到的每个问题修好，写成测试，并记到 `EXPERIMENT_REPORT.md`。
-4. 重复，直到**连续两轮没有发现新的问题**。
-
-### 5.5 预算和停止条件
-
-- 最长工作时间和 token 上限由启动提示词里给出。
-- **正常停止：** 第 1 节的完成定义全部满足。
-- **预算用完停止：** 交付当前状态，在报告里写清楚还差什么。
-- **卡住时停止：** 同一个问题连续尝试 5 次仍不能解决，写入 `BLOCKERS.md`，转去做其他部分。
-
-### 5.6 过程文件
-
-`PLAN.md`、`PROGRESS.md`、`DECISIONS.md`、`BLOCKERS.md`、`EXPERIMENT_REPORT.md`。它们不是为了好看，而是让一个没看过你工作过程的人也能接手。
+In `EXPERIMENT_REPORT.md`, list the verification status of every feature in one table: **verified by automated tests, verified in a real environment, or code written but not verified**. Anything that was not run in a real environment must not be reported as verified.
 
 ---
 
-## 6. 交付物清单
+## 5. Autonomous working protocol
 
-**仓库里必须有：**
+Work as independently as you can across the whole project, and do not stop to ask about small matters. This is how you work.
 
-| 交付物 | 要求 |
+### 5.1 Working loop
+
+1. **Plan first.** Read all of `SPEC.md` and write `PLAN.md`: milestones, the acceptance check for each milestone, the risks you foresee, and the list of tests to write.
+2. **Test first, in small steps.** For each feature, write a failing test first, confirm it fails for the right reason, and then write the implementation.
+3. **Run the full test suite after every change.** Commit only when green. Keep commits small and frequent, with English commit messages.
+4. **At the end of each milestone,** update `PROGRESS.md` (what was done, test results, next step, known issues).
+5. **When the features are done, begin the adversarial self-review** (see 5.4).
+6. **Finish with a cold-start check:** a fresh clone, following only the README, must pass the tests and run the demo.
+
+### 5.2 Decision rights
+
+**You may decide on your own:** choice of libraries (within the constraints in section 3), file and module structure, naming, table details, test strategy, and implementation choices such as "high-water mark versus full comparison".
+
+**Record every decision in `DECISIONS.md`:** the context, the options considered, what you chose, why, and how easy it is to change later.
+
+**In the following situations, stop, write it to `BLOCKERS.md`, and continue with the parts that are not affected:**
+
+- You need credentials, accounts, or paid services that you do not have.
+- The requirements contradict each other, and it affects money or data correctness.
+- You would need to delete or overwrite something outside the repository.
+- Anything that involves real money or a live environment.
+
+If nobody can answer immediately, continue with the safest, most conservative assumption and mark it as an assumption in `BLOCKERS.md`.
+
+### 5.3 Prohibited actions
+
+- Do not delete or weaken a test to make it pass.
+- Do not hardcode results to satisfy a test.
+- Do not mock the logic under test.
+- Do not commit any secret.
+- Do not force push, and do not rewrite history that has been pushed.
+- Do not report a result you did not actually run. "I believe it works" is not the same as "I ran it".
+- Do not ignore edge cases just to look finished.
+
+### 5.4 Adversarial self-review
+
+You are prone to bias about what you just wrote, so look for faults on purpose. When the features are done, run at least two rounds:
+
+1. **Have an independent review subagent review the work.** It sees only `SPEC.md` and the code, not your reasoning, and its goal is to find paths that cause duplicate, lost, or wrong data, or a hang.
+2. **Write tests that deliberately try to break your own work.** For example: the same event delivered concurrently, a sync process killed halfway, odd amount formats, empty values and very long strings, duplicate `Entry ID`s, timezone boundaries, renamed spreadsheet columns, Stripe events arriving out of order, and one donation triggering several events.
+3. Fix every problem you find, turn it into a test, and record it in `EXPERIMENT_REPORT.md`.
+4. Repeat until **two consecutive rounds find nothing new**.
+
+### 5.5 Budget and stopping conditions
+
+- The maximum working time and token limit are given in the launch prompt.
+- **Normal stop:** every item in the definition of done in section 1 is satisfied.
+- **Stop when the budget is used up:** deliver the current state and state clearly in the report what is still missing.
+- **Stop when stuck:** if you cannot resolve the same problem after five attempts in a row, write it to `BLOCKERS.md` and move on to other parts.
+
+### 5.6 Process files
+
+`PLAN.md`, `PROGRESS.md`, `DECISIONS.md`, `BLOCKERS.md`, `EXPERIMENT_REPORT.md`. They are not for show. They let someone who did not watch you work take over.
+
+---
+
+## 6. Deliverables
+
+**The repository must contain:**
+
+| Deliverable | Requirement |
 | --- | --- |
-| 源代码 | 模块清晰，类型注解完整，业务逻辑和外部服务分开 |
-| 数据库迁移 | Alembic，从空数据库能一键建表 |
-| 测试 | 第 2 节每条需求都有测试，包括并发去重和故障注入 |
-| CI | GitHub Actions，使用 PostgreSQL service container，全绿 |
-| `README.md`（英文） | 见下面的结构 |
-| `DECISIONS.md` | 每个重要决定的背景、选项、理由 |
-| `PLAN.md`、`PROGRESS.md`、`BLOCKERS.md` | 过程记录 |
-| `EXPERIMENT_REPORT.md` | 见下面的结构 |
-| 离线演示 | 一条命令跑完，见下面的内容 |
-| `.env.example`、`.gitignore` | 不含任何真实密钥 |
-| 示例数据 | 一份带各种坏数据的 CSV，以及几个 Stripe 假事件 |
+| Source code | Clear modules, complete type annotations, business logic separate from external services |
+| Database migrations | Alembic; a single command creates the schema from an empty database |
+| Tests | Every requirement in section 2 has a test, including concurrent deduplication and fault injection |
+| CI | GitHub Actions with a PostgreSQL service container, green |
+| `README.md` (English) | See the structure below |
+| `DECISIONS.md` | Context, options, and reasoning for every important decision |
+| `PLAN.md`, `PROGRESS.md`, `BLOCKERS.md` | Process records |
+| `EXPERIMENT_REPORT.md` | See the structure below |
+| Offline demo | Runs with one command; see below |
+| `.env.example`, `.gitignore` | Contain no real secrets |
+| Sample data | A CSV with a variety of bad data, and several fake Stripe events |
 
-### README 的结构
+### README structure
 
-1. 这个项目是什么、解决什么问题（三句话）。
-2. 架构图（用 Mermaid）：两个来源、统一的表、同步任务。
-3. 数据模型：每张表和每个关键字段的说明。
-4. **正确性和恢复：** 用一两段话说清楚"为什么不会重复、失败后怎么恢复"，这是最重要的一节。
-5. 怎么运行：离线模式和真实接入模式。
-6. 怎么测试。
-7. 设计取舍：考虑过什么、为什么选了现在这样。
-8. 已知限制和不在范围内的事。
-9. 出现故障时怎么处理（运维手册）。
+1. What the project is and what problem it solves (three sentences).
+2. An architecture diagram (use Mermaid): the two sources, the unified table, and the sync job.
+3. Data model: an explanation of each table and each key field.
+4. **Correctness and recovery:** one or two paragraphs explaining clearly why duplicates cannot occur and how the system recovers after a failure. This is the most important section.
+5. How to run: offline mode and real-integration mode.
+6. How to test.
+7. Design trade-offs: what you considered and why you chose what you chose.
+8. Known limitations and what is out of scope.
+9. What to do when something goes wrong (runbook).
 
-### 离线演示要做什么
+### What the offline demo must do
 
-一条命令（例如 `make demo`）依次展示，每一步都打印清楚的说明和结果：
+One command (for example `make demo`) that shows the following in order, printing a clear explanation and result at each step:
 
-1. 初始化数据库。
-2. 发送一个签名正确的 Stripe 事件，再原样发送一次，表里只有一条。
-3. 发送签名错误的事件，被拒绝。
-4. 对一份带坏数据的 CSV 跑同步，好的入库，坏的被隔离并有原因。
-5. 模拟同步中途失败，再重跑，数据不重复、不缺失。
-6. 打印最终的表和 `sync_runs`。
+1. Initialize the database.
+2. Send a correctly signed Stripe event, then send the exact same event again; the table has only one record.
+3. Send an event with a wrong signature; it is rejected.
+4. Run the sync on a CSV containing bad data; good rows are inserted, bad rows are quarantined with a reason.
+5. Simulate a failure midway through a sync, then rerun; the data has no duplicates and nothing is missing.
+6. Print the final tables and `sync_runs`.
 
-### `EXPERIMENT_REPORT.md` 的结构
+### `EXPERIMENT_REPORT.md` structure
 
-1. 一个总结表：开始和结束时间、消耗的迭代轮数、人工介入次数、测试总数和通过数。
-2. 每一项功能的验证状态（自动化测试验证、真实环境验证、只写了代码未验证）。
-3. 对抗式自查找到的问题和修复。
-4. 你做过的假设和模糊的需求。
-5. 没完成的东西和原因。
-6. 如果重来一次，说明书里哪些地方应该写得更清楚。
+1. A summary table: start and end time, number of iteration rounds used, number of human interventions, total tests and number passing.
+2. The verification status of every feature (verified by automated tests, verified in a real environment, or code written but not verified).
+3. Problems found by the adversarial self-review and how they were fixed.
+4. Assumptions you made and requirements that were unclear.
+5. What was not finished and why.
+6. If you did it again, which parts of this specification should be written more clearly.
