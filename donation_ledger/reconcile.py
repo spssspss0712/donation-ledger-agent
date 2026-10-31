@@ -170,6 +170,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     engine = make_engine(settings.database_url)
     try:
         result = run_reconcile(engine, source, timedelta(hours=settings.reconcile_lookback_hours))
+    except Exception as exc:  # noqa: BLE001 - e.g. database unreachable at startup
+        log.error("reconcile could not start", extra={"error": safe_error_message(exc)})
+        return EXIT_FAILED
     finally:
         engine.dispose()
     if result.status == "succeeded":

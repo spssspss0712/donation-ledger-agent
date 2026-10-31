@@ -40,3 +40,18 @@ def test_alembic_cli_upgrades_an_empty_database_from_the_repo_root() -> None:
     assert proc.returncode == 0, proc.stderr.decode()[-500:]
     assert "donations" in inspect(eng).get_table_names()
     eng.dispose()
+
+
+def test_sync_cli_with_unreachable_database_exits_1_with_a_json_error_not_a_traceback() -> None:
+    env = {
+        **os.environ,
+        "DATABASE_URL": "postgresql+psycopg://x:SECRETPW@127.0.0.1:1/none",
+        "SHEET_SOURCE": "csv",
+        "SHEET_CSV_PATH": "sample_data/sheet.csv",
+    }
+    proc = subprocess.run(  # noqa: S603
+        [sys.executable, "-m", "donation_ledger.sync"], env=env, capture_output=True, timeout=60
+    )
+    assert proc.returncode == 1
+    assert b"Traceback" not in proc.stderr and b"SECRETPW" not in proc.stderr
+    assert b'"level": "ERROR"' in proc.stderr
