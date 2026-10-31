@@ -1,0 +1,30 @@
+[project]
+name = "donation-ledger"
+version = "0.1.0"
+description = "Append-only donation ledger fed by Stripe webhooks and a Google Sheet"
+requires-python = ">=3.12"
+
+[tool.setuptools]
+packages = ["donation_ledger", "donation_ledger.sources"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["migrations/versions"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "S", "SIM"]
+ignore = ["S101"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S105", "S106", "S608"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["donation_ledger", "tests"]
+plugins = []
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["error::pytest.PytestUnraisableExceptionWarning"]
