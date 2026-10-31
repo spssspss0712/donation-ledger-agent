@@ -70,7 +70,7 @@ def upgrade() -> None:
         sa.Column("sync_run_id", sa.BigInteger(), nullable=True),
         sa.Column("first_seen_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
         sa.Column("last_seen_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.CheckConstraint("status IN ('open', 'resolved', 'ignored')", name="ck_rejected_status"),
+        sa.CheckConstraint("status IN ('open', 'resolved', 'absent', 'ignored')", name="ck_rejected_status"),
         sa.ForeignKeyConstraint(["first_seen_run_id"], ["sync_runs.id"], ondelete="SET NULL"),
         sa.ForeignKeyConstraint(["sync_run_id"], ["sync_runs.id"], ondelete="SET NULL"),
         sa.PrimaryKeyConstraint("id"),

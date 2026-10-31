@@ -96,6 +96,10 @@ def classify_table(
         if all(not c.strip() for c in cells):
             continue  # fully blank spacer rows are not data
         raw = {name: _safe_cell(cells[i]) for i, name in enumerate(header_names) if i < len(cells)}
+        name_header = header_names[mapping["donor_name"]]
+        if raw.get(name_header, "").strip().casefold() == "anonymous":
+            # The word "Anonymous" must never be stored, not even inside raw payloads.
+            raw[name_header] = ""
         parsed.append((number, list(cells), raw))
     id_counts = Counter(
         cells[mapping["entry_id"]].strip()
@@ -146,6 +150,8 @@ def _classify_row(
             f"duplicate_entry_id: appears {id_counts[entry_id]} times in the sheet", entry_id
         )
     fields = {f: _safe_cell(cell(f).strip()) for f in REQUIRED_COLUMNS}
+    if fields["donor_name"].casefold() == "anonymous":
+        fields["donor_name"] = ""
     result = _build_donation(entry_id, fields, raw, number, tz_name, now)
     if isinstance(result, str):
         return Candidate(

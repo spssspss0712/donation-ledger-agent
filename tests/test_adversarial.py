@@ -144,3 +144,57 @@ def test_non_finite_numbers_in_a_signed_payload_are_stored_safely_not_a_500(
     )
     assert resp.status_code == 200
     assert rows(engine, "SELECT count(*) FROM rejected_rows") == [(1,)]
+
+
+def test_the_word_anonymous_appears_nowhere_in_stored_sheet_data(engine: Engine) -> None:
+    from donation_ledger.sync import run_sync
+    from tests.test_sync import TZ, ListReader, good
+
+    run_sync(
+        engine,
+        ListReader([good("AN1", name="Anonymous"), good("AN2", "bad", name="ANONYMOUS")]),
+        TZ,
+    )
+    run_sync(
+        engine,
+        ListReader([good("AN1", name="anonymous"), good("AN2", "bad", name="ANONYMOUS")]),
+        TZ,
+    )
+    dump = rows(
+        engine,
+        "SELECT (SELECT string_agg(raw_payload::text, '') FROM donations) || "
+        "(SELECT string_agg(raw_row::text, '') FROM rejected_rows) || "
+        "coalesce((SELECT string_agg(detail::text, '') FROM sync_issues), '')",
+    )[0][0]
+    assert "nonymous" not in str(dump).lower().replace("anonymous_", "")
+    # Re-casing "Anonymous" is not an edit worth a warning.
+    assert rows(engine, "SELECT count(*) FROM sync_issues") == [(0,)]
+
+
+def test_signed_json_array_body_is_a_400_not_a_500(engine: Engine, settings: Settings) -> None:
+    client = TestClient(create_app(settings, engine), raise_server_exceptions=False)
+    body = b"[]"
+    resp = client.post(
+        "/webhooks/stripe",
+        content=body,
+        headers={"Stripe-Signature": sign(body, FAKE_WEBHOOK_SECRET)},
+    )
+    assert resp.status_code == 400
+
+
+def test_succeeded_payment_with_zero_amount_received_is_quarantined_not_charged_full_amount() -> (
+    None
+):
+    obj = payment_intent(amount=2000)
+    obj["amount_received"] = 0
+    assert isinstance(map_payment_intent(obj), Rejection)
+
+
+def test_database_connections_carry_timeouts(engine: Engine) -> None:
+    with engine.connect() as conn:
+        assert rows_one(conn, "SHOW statement_timeout") == "2min"
+        assert rows_one(conn, "SHOW lock_timeout") == "30s"
+
+
+def rows_one(conn: Any, sql: str) -> str:
+    return str(conn.execute(text(sql)).scalar_one())

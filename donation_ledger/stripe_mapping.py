@@ -84,8 +84,8 @@ def _positive_int(value: Any) -> int | None:
 def _amount(pi: Mapping[str, Any]) -> int:
     # amount_received is what was actually captured; it can be lower than amount.
     received = pi.get("amount_received")
-    if isinstance(received, int) and not isinstance(received, bool) and received > 0:
-        amount: int | None = received
+    if isinstance(received, int) and not isinstance(received, bool):
+        amount = _positive_int(received)  # a succeeded payment that captured 0 is suspect
     else:
         amount = _positive_int(pi.get("amount"))
     if amount is None:

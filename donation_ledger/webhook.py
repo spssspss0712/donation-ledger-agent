@@ -40,7 +40,7 @@ def verify_and_parse(
     try:
         stripe.Webhook.construct_event(raw_body, signature_header, secret, tolerance=tolerance)
         parsed = json.loads(raw_body)
-    except (stripe.SignatureVerificationError, ValueError) as exc:
+    except Exception as exc:  # noqa: BLE001 - any SDK/parse failure means "not a valid event"
         raise SignatureError(type(exc).__name__) from exc
     if not isinstance(parsed, dict):
         raise SignatureError("event is not a JSON object")

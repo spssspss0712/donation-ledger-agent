@@ -72,7 +72,7 @@ def _release(conn: Connection, key: int) -> None:
         conn.rollback()
         conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": key})
         conn.commit()
-    except SQLAlchemyError:
+    except Exception:  # noqa: BLE001 - whatever failed, never return a locked conn to the pool
         conn.invalidate()
     finally:
         conn.close()

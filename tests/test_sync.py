@@ -119,14 +119,14 @@ def test_quarantined_row_is_retried_and_ingested_once_it_is_fixed(engine: Engine
     assert rows(engine, "SELECT status FROM rejected_rows") == [("resolved",)]
 
 
-def test_a_quarantined_row_that_was_removed_from_the_sheet_is_marked_resolved(
+def test_a_quarantined_row_removed_from_the_sheet_is_marked_absent_not_resolved(
     engine: Engine,
 ) -> None:
     reader = ListReader([good("C1", "bad")])
     sync(engine, reader)
     reader.table = SheetTable(HEADER, [])
     sync(engine, reader)
-    assert rows(engine, "SELECT status FROM rejected_rows") == [("resolved",)]
+    assert rows(engine, "SELECT status FROM rejected_rows") == [("absent",)]
 
 
 def test_a_rejection_that_comes_back_is_reopened(engine: Engine) -> None:

@@ -32,6 +32,7 @@ class GoogleSheetReader:
     def read(self) -> SheetTable:
         try:
             client = gspread.service_account_from_dict(self._credentials())
+            client.set_timeout(60)  # gspread defaults to no timeout: a stall would hold the lock
             book = client.open_by_key(self._sheet_id)
             sheet = book.worksheet(self._worksheet) if self._worksheet else book.sheet1
             # Formatted values: the same text staff see ("$1,000.50", "1/15/2024").

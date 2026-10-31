@@ -86,7 +86,9 @@ class RejectedRow(Base):
     __tablename__ = "rejected_rows"
     __table_args__ = (
         UniqueConstraint("source", "row_fingerprint", name="uq_rejected_rows_source_fingerprint"),
-        CheckConstraint("status IN ('open', 'resolved', 'ignored')", name="ck_rejected_status"),
+        CheckConstraint(
+            "status IN ('open', 'resolved', 'absent', 'ignored')", name="ck_rejected_status"
+        ),
         Index("ix_rejected_rows_source_external_id", "source", "external_id"),
     )
 

@@ -124,7 +124,7 @@ def _run_locked(
             committed_batches += 1
         assert_lock_still_held(lock_conn)
         with Session(engine) as session, session.begin():
-            _resolve_absent_rejections(session, run_id)
+            _mark_absent_rejections(session, run_id)
             finish_run(session, run_id, "succeeded", None)
     except (HeaderError, SheetReadError) as exc:
         return _fail(engine, run_id, counters, "failed", f"{type(exc).__name__}: {exc}")
@@ -229,8 +229,12 @@ def _warn_if_changed(session: Session, row: Candidate, stored: dict[str, Any], r
     return 1 if session.execute(stmt).first() is not None else 0
 
 
-def _resolve_absent_rejections(session: Session, run_id: int) -> None:
-    """After a fully successful pass, open rejections not seen this run are fixed or gone."""
+def _mark_absent_rejections(session: Session, run_id: int) -> None:
+    """Open rejections not seen in a fully successful run are no longer in the sheet.
+
+    They become 'absent' (not 'resolved'): nothing was fixed and no donation exists, and
+    they reopen automatically if the same row comes back.
+    """
     session.execute(
         update(RejectedRow)
         .where(
@@ -238,7 +242,7 @@ def _resolve_absent_rejections(session: Session, run_id: int) -> None:
             RejectedRow.status == "open",
             RejectedRow.sync_run_id.is_distinct_from(run_id),
         )
-        .values(status="resolved")
+        .values(status="absent")
     )
 
 
