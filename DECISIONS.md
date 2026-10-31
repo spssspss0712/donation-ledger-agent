@@ -90,7 +90,7 @@ Format: context, options, choice, why, how easy to change later.
 fastapi + uvicorn (spec), SQLAlchemy 2 + alembic + psycopg 3 (spec; psycopg binary wheel avoids system libpq), pydantic (response models; already a FastAPI dependency), stripe (spec: signature verification and API client), gspread (spec). Dev: pytest, httpx (needed by FastAPI's TestClient), ruff, mypy, pip-audit. No pydantic-settings: settings are a 40-line dataclass over `os.environ`. `pip-audit` reported no known vulnerabilities for the runtime pins when run (see report).
 
 ## D12. Branch name
-- The launch prompt asks for branch `agent/build`; the harness also designates `claude/fervent-ride-w959iu`. Work is on `agent/build` (explicit instruction in the task). Nothing was force-pushed.
+- The launch prompt asks for branch `agent/build` (the hosting environment also suggested a different branch name, `claude/fervent-ride-w959iu`). Work is on `agent/build` (explicit instruction in the task). Nothing was force-pushed.
 
 ## D13. Test expectation that was wrong (not weakened)
 - In `test_error_raised_midway_...` I first asserted `rows_duplicate_skipped == 0` on the rerun. That expectation was wrong: the 20 rows committed before the failure are correctly reported as already-present duplicates on the rerun. The assertion was corrected to 20 (the stronger, accurate statement); no code was changed to fit.

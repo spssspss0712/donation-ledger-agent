@@ -48,7 +48,7 @@ make install      # pinned runtime deps + constraints.txt for transitive version
 make db            # docker compose: PostgreSQL with the ledger, ledger_test and ledger_demo databases
 ```
 
-(No Docker? Create three databases `ledger`, `ledger_test`, `ledger_demo` owned by a user `ledger`/`ledger` in any PostgreSQL 16, or set `DATABASE_URL`, `TEST_DATABASE_URL`, `DEMO_DATABASE_URL`.)
+(No Docker? In any PostgreSQL 16, connected as a superuser to the `postgres` database: `CREATE USER ledger WITH PASSWORD 'ledger' CREATEDB; CREATE DATABASE ledger OWNER ledger; CREATE DATABASE ledger_test OWNER ledger; CREATE DATABASE ledger_demo OWNER ledger;` — or point `DATABASE_URL`, `TEST_DATABASE_URL`, `DEMO_DATABASE_URL` at your own databases. The Makefile defaults to the `ledger*` databases above. `make demo` **wipes** the `*demo*` database it uses and refuses any other name.)
 
 **Offline mode** (no credentials, no network):
 
@@ -65,6 +65,18 @@ SHEET_SOURCE=csv SHEET_CSV_PATH=sample_data/sheet.csv python -m donation_ledger.
 ```bash
 ALLOW_UNAUTHENTICATED_API=true STRIPE_WEBHOOK_SECRET=whsec_FAKE_local uvicorn donation_ledger.main:create --factory
 ```
+
+Without `API_TOKEN` (or the local-only `ALLOW_UNAUTHENTICATED_API=true`) `GET /donations` and `GET /sync-runs` answer 503; with a token set, send `Authorization: Bearer <token>` (wrong/missing = 401). `GET /health` is always open. `GET /donations` takes `limit` (1-200), `source` (`stripe`/`sheet`) and `before_id` (the previous page's `next_before_id`).
+
+Send a signed sample webhook by hand (the signature is `t=<unix time>,v1=HMAC_SHA256(secret, "<t>.<raw body>")`):
+
+```bash
+f=sample_data/stripe_events/payment_intent_succeeded.json; t=$(date +%s)
+s=$(printf '%s.' $t | cat - $f | openssl dgst -sha256 -hmac whsec_FAKE_local | awk '{print $NF}')
+curl -X POST localhost:8000/webhooks/stripe -H "Stripe-Signature: t=$t,v1=$s" --data-binary @$f
+```
+
+Other samples: `payment_intent_succeeded_anonymous.json` (no donor name) and `charge_refunded.json` (ignored event type).
 
 **Real-integration mode** (Phase B; **not verified**, see EXPERIMENT_REPORT.md). Copy `.env.example` to `.env` and fill in: `STRIPE_WEBHOOK_SECRET` (from the Stripe dashboard/CLI), `STRIPE_API_KEY` (a **test-mode** `sk_test_...` key; live keys are refused), `SHEET_SOURCE=google`, `GOOGLE_SHEET_ID`, `GOOGLE_WORKSHEET` (optional) and `GOOGLE_SERVICE_ACCOUNT_JSON` (the JSON itself or a path; share the sheet with the service account's e-mail). Then schedule:
 
@@ -94,10 +106,9 @@ See `DECISIONS.md` for the full list. The main ones: full comparison every run (
 
 - Refunds, disputes and any Stripe event other than `payment_intent.succeeded` are ignored (by specification).
 - `Stripe` donor name/e-mail are only available when the event carries them (billing details on an expanded charge, `receipt_email`, or `metadata.donor_name`/`donor_email`). A bare PaymentIntent event has no name, so those donations are stored as anonymous.
-- Reconciliation looks back a fixed window by creation time; a payment created before the window that succeeds later is missed if its webhook is also lost.
+- Reconciliation looks back a fixed window by payment creation time; a payment created before the window that succeeds later is missed if its webhook is also lost.
 - If someone edits a synced sheet row, only a warning is stored; nobody is notified automatically. Check `sync_issues`.
 - A named Stripe donor can be stored as anonymous: real webhook events carry `latest_charge` as an ID string, and the billing name lives on the charge. Only reconciliation (which expands the charge) or `metadata.donor_name` supplies it, and the append-only ledger never back-fills. If the webhook wins the race the row stays anonymous. Put the donor name in PaymentIntent metadata on the website to avoid this.
-- Reconciliation cannot see payments created before its lookback window that succeed later.
 - Amounts like `.5` or `10.` are quarantined (only `1000`, `1,000.50`, `$1,000.50` styles are accepted).
 - Stripe `raw_payload` is stored verbatim, so a donor literally named "Anonymous" in Stripe metadata appears there (the `donor_name` column is still NULL).
 - The word "Anonymous" is scrubbed from stored data only where it is a donor name (sheet `Donor Name`, any Stripe string value equal to it); in other columns (address, recipient, extra columns) it is stored as written. In Stripe, a billing name of "Anonymous" is blanked before name fallbacks run, so metadata/shipping names may then be used.
@@ -125,4 +136,5 @@ See `DECISIONS.md` for the full list. The main ones: full comparison every run (
 | Webhook returns 400 | Wrong `STRIPE_WEBHOOK_SECRET`, body altered by a proxy, or clock skew over 5 minutes. |
 | Webhook returns 5xx | Database problem. Stripe retries automatically; run the reconcile job afterwards to be sure nothing was missed. |
 | Webhook returns 503 | `STRIPE_WEBHOOK_SECRET` is not set. |
+| `/donations` returns 503 / 401 | 503: neither `API_TOKEN` nor `ALLOW_UNAUTHENTICATED_API=true` is configured. 401: wrong or missing bearer token. |
 | Missing Stripe donations | Run `python -m donation_ledger.reconcile` (optionally with a larger `RECONCILE_LOOKBACK_HOURS`). |
