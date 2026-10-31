@@ -8,6 +8,7 @@ the (optionally expanded) latest charge's ``billing_details`` or from ``metadata
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
@@ -21,6 +22,8 @@ def sanitize(value: Any) -> Any:
     """Recursively make JSON data storable in PostgreSQL JSONB/TEXT."""
     if isinstance(value, str):
         return clean_stripe_text(value)
+    if isinstance(value, float) and not math.isfinite(value):
+        return str(value)  # JSONB rejects NaN/Infinity tokens
     if isinstance(value, Mapping):
         return {clean_stripe_text(str(k)): sanitize(v) for k, v in value.items()}
     if isinstance(value, list | tuple):
@@ -64,9 +67,11 @@ def map_payment_intent(pi: Mapping[str, Any]) -> NewDonation | Rejection:
 
 
 def _currency(value: Any) -> str:
-    if not isinstance(value, str) or len(value.strip()) != 3 or not value.strip().isalpha():
+    code = value.strip() if isinstance(value, str) else ""
+    # isascii: str.isalpha() accepts letters like "ǅ" that the DB CHECK would then reject.
+    if len(code) != 3 or not code.isascii() or not code.isalpha():
         raise RowError("invalid_currency: missing or not a 3-letter code")
-    return value.strip().upper()
+    return code.upper()
 
 
 def _positive_int(value: Any) -> int | None:

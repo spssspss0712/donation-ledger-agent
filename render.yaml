@@ -1,0 +1,41 @@
+# Render blueprint. WRITTEN BUT NEVER DEPLOYED (Phase C was out of scope: no Render access).
+services:
+  - type: web
+    name: donation-ledger-api
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    preDeployCommand: alembic upgrade head
+    startCommand: uvicorn donation_ledger.main:create --factory --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase: {name: donation-ledger-db, property: connectionString}
+      - {key: STRIPE_WEBHOOK_SECRET, sync: false}
+      - {key: API_TOKEN, sync: false}
+      - {key: SHEET_TIMEZONE, value: America/Los_Angeles}
+  - type: cron
+    name: donation-ledger-sheet-sync
+    runtime: python
+    schedule: "17 11 * * *"   # daily, UTC
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m donation_ledger.sync
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase: {name: donation-ledger-db, property: connectionString}
+      - {key: SHEET_SOURCE, value: google}
+      - {key: GOOGLE_SHEET_ID, sync: false}
+      - {key: GOOGLE_SERVICE_ACCOUNT_JSON, sync: false}
+      - {key: SHEET_TIMEZONE, value: America/Los_Angeles}
+  - type: cron
+    name: donation-ledger-stripe-reconcile
+    runtime: python
+    schedule: "43 * * * *"    # hourly
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m donation_ledger.reconcile
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase: {name: donation-ledger-db, property: connectionString}
+      - {key: STRIPE_API_KEY, sync: false}
+databases:
+  - name: donation-ledger-db
+    plan: basic-256mb
