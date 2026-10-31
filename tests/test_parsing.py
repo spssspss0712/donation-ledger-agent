@@ -146,3 +146,8 @@ def test_invalid_or_implausible_dates_are_rejected(text: str) -> None:
 
 def test_stripe_text_cleaning_removes_nul_and_lone_surrogates() -> None:
     assert clean_stripe_text("a\x00b\ud800c") == "ab?c"
+
+
+def test_ugx_is_a_two_decimal_currency_like_stripe_treats_it() -> None:
+    # Stripe's API expresses UGX amounts x100, so sheet and Stripe rows must agree.
+    assert minor_units_from_decimal_string("5000", "UGX") == 500000

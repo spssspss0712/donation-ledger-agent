@@ -7,6 +7,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+MAX_BATCH_SIZE = 5000
+
 
 class ConfigError(Exception):
     """Raised when the environment is missing or contains unsafe configuration."""
@@ -90,4 +92,7 @@ def _positive_int(env: Mapping[str, str], name: str, default: int) -> int:
         raise ConfigError(f"{name} must be an integer") from exc
     if value < 1:
         raise ConfigError(f"{name} must be >= 1")
+    if name == "SYNC_BATCH_SIZE" and value > MAX_BATCH_SIZE:
+        # One multi-row INSERT binds ~11 parameters per row; PostgreSQL allows 65535.
+        raise ConfigError(f"SYNC_BATCH_SIZE must be <= {MAX_BATCH_SIZE}")
     return value

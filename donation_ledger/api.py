@@ -90,9 +90,14 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
         declared = request.headers.get("content-length")
         if declared and declared.isdigit() and int(declared) > settings.max_webhook_body_bytes:
             return JSONResponse({"detail": "payload too large"}, status_code=413)
-        raw = await request.body()
-        if len(raw) > settings.max_webhook_body_bytes:
-            return JSONResponse({"detail": "payload too large"}, status_code=413)
+        chunks: list[bytes] = []
+        total = 0
+        async for chunk in request.stream():  # stop early: chunked bodies carry no length
+            total += len(chunk)
+            if total > settings.max_webhook_body_bytes:
+                return JSONResponse({"detail": "payload too large"}, status_code=413)
+            chunks.append(chunk)
+        raw = b"".join(chunks)
         try:
             event = verify_and_parse(
                 raw,

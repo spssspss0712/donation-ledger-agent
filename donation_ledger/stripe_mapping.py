@@ -15,13 +15,21 @@ from typing import Any
 
 from donation_ledger.ledger import NewDonation, Rejection, fingerprint_of
 from donation_ledger.models import SOURCE_STRIPE
-from donation_ledger.parsing import MAX_AMOUNT_MINOR, MAX_NAME_LEN, RowError, clean_stripe_text
+from donation_ledger.parsing import (
+    ISO_4217,
+    MAX_AMOUNT_MINOR,
+    MAX_NAME_LEN,
+    RowError,
+    clean_stripe_text,
+)
 
 
 def sanitize(value: Any) -> Any:
     """Recursively make JSON data storable in PostgreSQL JSONB/TEXT."""
     if isinstance(value, str):
-        return clean_stripe_text(value)
+        text = clean_stripe_text(value)
+        # "Anonymous" is never stored, not even inside raw payloads.
+        return "" if text.strip().casefold() == "anonymous" else text
     if isinstance(value, float) and not math.isfinite(value):
         return str(value)  # JSONB rejects NaN/Infinity tokens
     if isinstance(value, Mapping):
@@ -69,7 +77,7 @@ def map_payment_intent(pi: Mapping[str, Any]) -> NewDonation | Rejection:
 def _currency(value: Any) -> str:
     code = value.strip() if isinstance(value, str) else ""
     # isascii: str.isalpha() accepts letters like "ǅ" that the DB CHECK would then reject.
-    if len(code) != 3 or not code.isascii() or not code.isalpha():
+    if code.upper() not in ISO_4217 or not code.isascii():
         raise RowError("invalid_currency: missing or not a 3-letter code")
     return code.upper()
 

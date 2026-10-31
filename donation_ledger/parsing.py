@@ -26,7 +26,6 @@ ZERO_DECIMAL = frozenset(
         "MGA",
         "PYG",
         "RWF",
-        "UGX",
         "VND",
         "VUV",
         "XAF",
@@ -282,7 +281,10 @@ def parse_sheet_datetime(text: str, tz_name: str, now: datetime | None = None) -
     if parsed.tzinfo is None:
         # fold=0 picks the first occurrence of an ambiguous (DST fall-back) wall time.
         parsed = parsed.replace(tzinfo=ZoneInfo(tz_name))
-    utc = parsed.astimezone(UTC)
+    try:
+        utc = parsed.astimezone(UTC)
+    except (OverflowError, ValueError) as exc:  # e.g. 9999-12-31 23:00 shifted past year 9999
+        raise RowError("invalid_date: outside plausible range") from exc
     current = now or datetime.now(UTC)
     if utc < MIN_DATE or utc > current + FUTURE_SLACK:
         raise RowError("invalid_date: outside plausible range")

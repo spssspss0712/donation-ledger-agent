@@ -198,3 +198,60 @@ def test_database_connections_carry_timeouts(engine: Engine) -> None:
 
 def rows_one(conn: Any, sql: str) -> str:
     return str(conn.execute(text(sql)).scalar_one())
+
+
+@pytest.mark.parametrize(
+    "cell",
+    [
+        "12/31/9999 23:00",
+        "9999-12-31 23:59",
+        "0001-01-01T00:00:00+14:00",
+        "9999-12-31T23:00:00-05:00",
+    ],
+)
+def test_extreme_dates_are_quarantined_and_do_not_fail_the_whole_sync(
+    engine: Engine, cell: str
+) -> None:
+    from donation_ledger.sync import run_sync
+    from tests.test_sync import TZ, ListReader, good
+
+    bad = ["EX2", cell, "A", "", "5", "USD", ""]
+    res = run_sync(engine, ListReader([good("EX1"), bad, good("EX3")]), TZ)
+    assert res.status == "succeeded"
+    assert rows(engine, "SELECT external_id FROM donations ORDER BY 1") == [("EX1",), ("EX3",)]
+    assert rows(engine, "SELECT external_id FROM rejected_rows") == [("EX2",)]
+
+
+def test_oversized_batch_size_is_refused_at_configuration_time() -> None:
+    from donation_ledger.config import ConfigError
+
+    with pytest.raises(ConfigError):
+        Settings.from_env({"DATABASE_URL": "postgresql://h/d", "SYNC_BATCH_SIZE": "7000"})
+
+
+def test_stripe_payload_never_stores_the_word_anonymous_and_unknown_currency_is_quarantined(
+    engine: Engine, settings: Settings
+) -> None:
+    client = TestClient(create_app(settings, engine), raise_server_exceptions=False)
+    named = payment_intent(latest_charge={"billing_details": {"name": "Anonymous"}})
+    for obj in (named, payment_intent("pi_XYZ", currency="xyz")):
+        body = encode(event(obj))
+        hdr = {"Stripe-Signature": sign(body, FAKE_WEBHOOK_SECRET)}
+        assert client.post("/webhooks/stripe", content=body, headers=hdr).status_code == 200
+    assert rows(
+        engine, "SELECT is_anonymous, raw_payload::text ILIKE '%anonymous%' FROM donations"
+    ) == [(True, False)]
+    assert rows(engine, "SELECT external_id FROM rejected_rows") == [("pi_XYZ",)]
+
+
+def test_chunked_oversized_body_without_content_length_is_refused(
+    engine: Engine, settings: Settings
+) -> None:
+    client = TestClient(create_app(settings, engine), raise_server_exceptions=False)
+
+    def gen() -> Any:
+        for _ in range(12):
+            yield b"x" * 100_000
+
+    resp = client.post("/webhooks/stripe", content=gen(), headers={"Stripe-Signature": "t=1,v1=00"})
+    assert resp.status_code == 413
