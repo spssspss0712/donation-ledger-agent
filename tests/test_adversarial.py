@@ -809,3 +809,7 @@ def test_reexporting_an_entry_id_in_decomposed_unicode_raises_no_change_warning(
     run_sync(engine, ListReader([good("Café-1")]), TZ)
     assert rows(engine, "SELECT count(*) FROM sync_issues") == [(0,)]
     assert rows(engine, "SELECT count(*) FROM donations") == [(1,)]
+
+
+def test_payment_id_containing_nul_is_quarantined_not_aliased_to_another_id() -> None:
+    assert isinstance(map_payment_intent(payment_intent("pi_ab\x00c")), Rejection)

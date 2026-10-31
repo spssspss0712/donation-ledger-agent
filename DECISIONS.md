@@ -69,6 +69,9 @@ Format: context, options, choice, why, how easy to change later.
 ## D7j. Round 10
 - docker-compose binds Postgres to 127.0.0.1; `.env.*` is git-ignored; `constraints.txt` pins the transitive dependency tree (used by CI/`make install`; `pip-audit` clean). Lone surrogates in Google-sourced text are replaced with `?` (practically unreachable; the CSV path cannot produce them).
 
+## D7k. Round 12
+- A NUL inside a PaymentIntent id quarantines the event (stripping it could alias another payment). httpx is pinned at 0.28.1 and Starlette emits a deprecation warning suggesting `httpx2` for its TestClient: harmless today, revisit on upgrade.
+
 ## D8. Stripe mapping
 - ID = `data.object.id` (`pi_...`). Amount = `amount_received` if positive, else `amount` (the money actually captured is the truthful figure; they differ on partial capture). `created` Unix seconds => UTC.
 - A PaymentIntent has no donor name; read from (expanded) `latest_charge.billing_details` / legacy `charges.data[0]`, then `metadata.donor_name|name`, `shipping.name`; e-mail from billing details, `receipt_email`, `metadata.donor_email|email`. **Assumption** (documented in BLOCKERS.md): the website puts donor info in one of these places. No name => anonymous.

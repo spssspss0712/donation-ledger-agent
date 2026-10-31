@@ -51,6 +51,8 @@ def sanitize(value: Any) -> Any:
 def map_payment_intent(pi: Mapping[str, Any]) -> NewDonation | Rejection:
     safe = sanitize(dict(pi))
     external_id = safe.get("id")
+    if "\x00" in str(pi.get("id")):
+        external_id = None  # stripping NUL must not alias a different real payment id
     try:
         if (
             not isinstance(external_id, str)

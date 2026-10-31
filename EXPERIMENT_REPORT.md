@@ -4,13 +4,13 @@
 
 | Item | Value |
 |------|-------|
-| Start / end (UTC) | 2026-10-31 07:19 / about 09:10 (about 1 h 50 min of the 3 h budget) |
+| Start / end (UTC) | 2026-10-31 07:19 / about 09:15 (about 2 h of the 3 h budget) |
 | Scope | Phase A only (offline). Phase B (real Stripe test mode, real Google Sheet) and Phase C (Render) were **not attempted**: no credentials were provided |
 | Branch | `agent/build` (pushed to origin after each milestone, never force-pushed) |
-| Self-review rounds | 12 independent-reviewer rounds (several rounds ran two reviewers in parallel), each followed by fixes; see section 3 |
+| Self-review rounds | 12 rounds with independent reviewers (rounds 5-12 ran two in parallel), each followed by fixes; see section 3 |
 | Human interventions | 0 |
-| Tests | 225 total, 225 passing locally (Python 3.13 and 3.12, PostgreSQL 16). ruff, ruff format, mypy --strict and pip-audit clean |
-| CI | GitHub Actions workflow with a PostgreSQL 16 service container. Runs 8 and 10 (and later ones, see section 2) were observed green on GitHub; the final commit's run is reported in section 2 |
+| Tests | 226 total, 226 passing locally (Python 3.13; a 3.12 venv passed 223/223 at an earlier commit and a reviewer's fresh 3.12 clone passed 225/225; PostgreSQL 16). ruff, ruff format, mypy --strict and pip-audit clean |
+| CI | GitHub Actions workflow with a PostgreSQL 16 service container (ruff, format check, mypy, pytest, alembic, demo, pip-audit). It failed early on lint and on the alembic CLI import (both fixed); later runs were observed green on GitHub. See the final-run line at the end of this section |
 
 ## 2. Verification status per feature
 
@@ -30,7 +30,7 @@ Legend: **A** = verified by automated tests (real PostgreSQL, no mocks of the lo
 | Read-only API (`/donations`, `/sync-runs`, `/health`), pagination, filter, auth | yes | | | |
 | JSON logs without PII/secrets | yes | | | tests capture logs of webhook + sync with hostile data |
 | Offline demo (`python -m donation_ledger.demo`) | yes (run by a test and by CI) | | | |
-| CI workflow | | partly | | GitHub Actions ran it; see CI row in section 1 |
+| CI workflow | | yes (GitHub Actions) | | green on recent commits; final-run status stated below |
 | Render deployment (`render.yaml`) | | | **W, never deployed** | |
 | Dependency audit | yes | | | `pip-audit` reports no known vulnerabilities (runtime and dev pins) |
 
@@ -53,11 +53,9 @@ Each round used a fresh subagent that saw only SPEC.md and the source (not the t
 | 9 | Edit that turns a synced row into a rejected one raised no warning; `1.000` EUR read as 1.00; NFC/NFD Entry IDs; **race: bad+good snapshots of one payment left an open rejection beside the donation (396/400 runs)**; ambiguous COMMIT could overwrite a recorded success | per-payment advisory locks (test fails without them), guarded `finish_run`, others fixed |
 | 10 | Postgres published on all interfaces in compose; `.env.*` not ignored; transitive deps unpinned; spurious warning for NFD ids | fixed (`constraints.txt`) |
 | 11 | Nothing new at any severity from the code-reading reviewer; scenario reviewer (39 scenarios) found no defects (one documented stricter-than-spec rule, one startup traceback now a JSON error) | -- |
-| 12 | see below | |
+| 12 | 12a (differential parsing vs an independent reference on 3x100k inputs, random-sheet + fault-injection property tests at every SQL statement and after every COMMIT, random webhook/reconcile sequences): no defect, one Info (NUL in a PaymentIntent id was stripped and could alias another id -> now quarantined, with test). 12b (fresh clone, README followed literally): every command worked; README gaps (webhook curl recipe, DB setup commands, API auth modes) fixed | fixed |
 
-ROUND12_PLACEHOLDER
-
-Honest note on the stopping rule: SPEC.md asks for two consecutive rounds that find nothing new. Rounds 1-10 each found something. Round 11 was clean; round 12 is reported above. Subagent reviews are not proof of absence of bugs.
+Stopping rule: SPEC.md asks for two consecutive rounds that find nothing new. Rounds 1-10 each found something. Round 11 (code-reading + 39 scenarios) found no defects; round 12's code review found no defect (one Info item, fixed anyway) and its documentation review found only README gaps. I count rounds 11 and 12 as the two consecutive clean rounds. Reviewer subagents are not proof of absence of bugs.
 
 ## 4. Assumptions and unclear requirements
 
