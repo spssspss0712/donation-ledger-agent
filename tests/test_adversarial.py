@@ -255,3 +255,40 @@ def test_chunked_oversized_body_without_content_length_is_refused(
 
     resp = client.post("/webhooks/stripe", content=gen(), headers={"Stripe-Signature": "t=1,v1=00"})
     assert resp.status_code == 413
+
+
+def test_fuzzed_sheet_cells_and_payment_intents_never_raise_out_of_the_classifiers() -> None:
+    import random
+    from datetime import UTC, datetime
+
+    from donation_ledger.sheet_rows import classify_table
+    from donation_ledger.sources import SheetTable
+
+    rng = random.Random(1234)  # fixed seed: reproducible
+    alphabet = list("0123456789-/:.,$()+eE TZ\u0000\ud800٠１é‮ ") + ["9999", "00", "NaN"]
+
+    def junk() -> str:
+        return "".join(rng.choice(alphabet) for _ in range(rng.randint(0, 25)))
+
+    header = ["Entry ID", "Date", "Donor Name", "Donor Address", "Amount", "Currency", "Recipient"]
+    now = datetime(2025, 6, 1, tzinfo=UTC)
+    for _ in range(3000):
+        row = [junk() for _ in range(rng.randint(1, 9))]
+        classify_table(SheetTable(header, [row]), "America/Los_Angeles", now)
+    values: list[Any] = [None, True, 0, -1, 1.5, 10**30, "", "x", [], {}, float("nan"), "pi_1"]
+    for _ in range(3000):
+        pi = {
+            k: rng.choice(values)
+            for k in (
+                "id",
+                "amount",
+                "amount_received",
+                "currency",
+                "created",
+                "metadata",
+                "latest_charge",
+                "receipt_email",
+                "shipping",
+            )
+        }
+        map_payment_intent(pi)
