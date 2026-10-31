@@ -23,7 +23,7 @@ def payment_intent(
     pi_id: str = "pi_FAKE0001",
     amount: int = 2500,
     currency: str = "usd",
-    created: int = 1_735_000_000,
+    created: float = 1_735_000_000,
     **extra: Any,
 ) -> dict[str, Any]:
     obj: dict[str, Any] = {
