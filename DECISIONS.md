@@ -22,7 +22,7 @@ Format: context, options, choice, why, how easy to change later.
 
 ## D6. Quarantine design
 - Identity of a rejected row is a SHA-256 fingerprint of its cell contents (not row number, so inserting rows above doesn't create new entries). Unique `(source, fingerprint)`.
-- Statuses: `open` (re-evaluated every run), `resolved` (a donation now exists for that ID, or the row vanished/was edited after a fully successful run), `ignored` (manual, permanent: such a row is skipped even if later validation rules would accept it). A resolved row that reappears is reopened.
+- Statuses: `open` (re-evaluated every run), `resolved` (a donation now exists for that ID, or the row vanished/was edited after a fully successful run), `ignored` (manual: silences that rejection only; if the same row later becomes valid, e.g. the other copy of a duplicate ID was deleted, it IS ingested - found by review, suppressing it would lose a donation). A resolved row that reappears is reopened.
 - Limitation: byte-identical bad rows collapse into one entry.
 - A row whose `Entry ID` already exists in `donations` is never quarantined for field problems; it is compared and, if different, produces a `changed_after_sync` warning (append-only rule). Duplicate/empty IDs are always quarantined, including the first copy, even when the ID already exists in the ledger (the existing donation stays untouched).
 - Rows with more cells than headers (typically an unquoted comma in an address that shifts every column) are quarantined; fully blank rows are skipped silently.
@@ -36,6 +36,10 @@ Format: context, options, choice, why, how easy to change later.
 - Dates: ISO 8601 (with or without time/offset) and US `M/D/YYYY[ H:MM[:SS][ AM/PM]]`. Naive values use `SHEET_TIMEZONE`; ambiguous DST fall-back times take the first occurrence, non-existent spring-forward times follow `zoneinfo`'s default. Plausible range 2000-01-01 to now+2 days (typo protection; a future-dated row is quarantined until its date arrives, then ingested).
 - Text with NUL characters is quarantined (PostgreSQL cannot store NUL; one such row would otherwise fail its whole batch on every run forever). Over-long name/address/recipient/ID quarantined. Lone surrogates are replaced.
 - Names: whitespace collapsed; `anonymous` (any case) or blank => NULL name. Address/recipient blank => NULL.
+
+## D7b. CSV reader robustness
+- Decoded with `errors="replace"` and a 10 MB field limit so one bad byte or giant cell cannot abort the whole file (the cell is stored with U+FFFD or quarantined by length checks). **Not handled:** an unterminated quote swallows the following lines into one cell (inherent to CSV); that row is then quarantined/odd and rows after it are missed until fixed. Google values have no such problem.
+- Zero-width/format-only names count as anonymous. ASCII-only currency codes (so `ınr` is not silently "corrected" to INR).
 
 ## D8. Stripe mapping
 - ID = `data.object.id` (`pi_...`). Amount = `amount_received` if positive, else `amount` (the money actually captured is the truthful figure; they differ on partial capture). `created` Unix seconds => UTC.

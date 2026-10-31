@@ -136,7 +136,7 @@ def _classify_row(
         i = mapping[field]
         return cells[i] if i < len(cells) else ""
 
-    entry_id = cell("entry_id").strip()
+    entry_id = _safe_cell(cell("entry_id").strip())
     if len(cells) > width and any(c.strip() for c in cells[width:]):
         return reject("malformed_row: more cells than header columns", entry_id)
     if any(has_nul(c) for c in cells):
@@ -186,6 +186,8 @@ def _build_donation(
             raise RowError("invalid_recipient: too long")
     except RowError as exc:
         return str(exc)
+    except (ArithmeticError, ValueError, UnicodeError):
+        return "invalid_row: value could not be processed"
     extra = {k: v for k, v in raw.items() if _norm_header(k) not in REQUIRED_COLUMNS.values()}
     return NewDonation(
         source=SOURCE_SHEET,

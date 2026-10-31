@@ -100,6 +100,8 @@ See `DECISIONS.md` for the full list. The main ones: full comparison every run (
 - Reconciliation cannot see payments created before its lookback window that succeed later.
 - Amounts like `.5` or `10.` are quarantined (only `1000`, `1,000.50`, `$1,000.50` styles are accepted).
 - Stripe `raw_payload` is stored verbatim, so a donor literally named "Anonymous" in Stripe metadata appears there (the `donor_name` column is still NULL).
+- The word "Anonymous" is scrubbed from stored data only where it is a donor name (sheet `Donor Name`, any Stripe string value equal to it); in other columns (address, recipient, extra columns) it is stored as written. In Stripe, a billing name of "Anonymous" is blanked before name fallbacks run, so metadata/shipping names may then be used.
+- A CSV row with an unterminated quote swallows the following lines (CSV limitation).
 - Two byte-identical bad rows (same cells, no distinguishing ID) share one `rejected_rows` entry.
 - The real Google Sheets reader and the real Stripe listing client were never run against the real services.
 - No authentication on the webhook other than the Stripe signature; no rate limiting.

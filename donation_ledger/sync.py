@@ -164,14 +164,13 @@ def _process_batch(
         if isinstance(outcome, Rejected):
             _quarantine(session, outcome.rejection, run_id, ignored, c)
             continue
-        if outcome.fingerprint in ignored:
-            c.rows_ignored += 1
-        elif outcome.entry_id in existing:
+        if outcome.entry_id in existing:
             c.rows_duplicate_skipped += 1
             c.issues_recorded += _warn_if_changed(
                 session, outcome, existing[outcome.entry_id], run_id
             )
         elif isinstance(outcome.result, NewDonation):
+            # "ignored" only silences rejections; a row that became valid must be ingested.
             to_insert.append(outcome.result)
         else:
             _quarantine(session, outcome.result, run_id, ignored, c)

@@ -292,3 +292,85 @@ def test_fuzzed_sheet_cells_and_payment_intents_never_raise_out_of_the_classifie
             )
         }
         map_payment_intent(pi)
+
+
+def test_ignoring_one_duplicate_id_rejection_does_not_suppress_the_row_once_it_is_valid(
+    engine: Engine,
+) -> None:
+    from donation_ledger.sync import run_sync
+    from tests.test_sync import TZ, ListReader, good
+
+    x, y = good("DUP", "5"), good("DUP", "7")
+    run_sync(engine, ListReader([x, y]), TZ)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "UPDATE rejected_rows SET status='ignored' WHERE reason LIKE 'duplicate%' AND raw_row->>'Amount'='5'"
+            )
+        )
+    run_sync(engine, ListReader([x]), TZ)  # the other copy was deleted from the sheet
+    assert rows(engine, "SELECT external_id, amount_minor FROM donations") == [("DUP", 500)]
+
+
+def test_csv_with_a_bad_byte_and_an_oversized_cell_still_syncs_the_other_rows(
+    engine: Engine, tmp_path: Any
+) -> None:
+    from donation_ledger.sources import CsvSheetReader
+    from donation_ledger.sync import run_sync
+    from tests.test_sync import HEADER, TZ
+
+    p = tmp_path / "s.csv"
+    big = "x" * 300_000
+    p.write_bytes(
+        (",".join(HEADER) + "\n").encode()
+        + b"C1,2024-03-01,Jos\xe9,,5,USD,\n"
+        + f"C2,2024-03-01,{big},,5,USD,\n".encode()
+        + b"C3,2024-03-01,Ok,,5,USD,\n"
+    )
+    res = run_sync(engine, CsvSheetReader(p), TZ)
+    assert res.status == "succeeded"
+    assert rows(engine, "SELECT external_id FROM donations ORDER BY 1") == [("C1",), ("C3",)]
+    assert rows(engine, "SELECT external_id FROM rejected_rows") == [("C2",)]
+
+
+def test_hostile_values_that_overflow_or_use_surrogates_are_quarantined_not_fatal() -> None:
+    from datetime import UTC, datetime
+
+    from donation_ledger.sheet_rows import Candidate, classify_table
+    from donation_ledger.sources import SheetTable
+    from tests.test_sync import HEADER
+
+    now = datetime(2025, 6, 1, tzinfo=UTC)
+    table = SheetTable(
+        HEADER,
+        [
+            ["a1\ud800", "2024-03-01", "N", "", "5", "USD", ""],
+            ["a2", "2024-03-01", "N", "", "9" * 1_000_005, "USD", ""],
+            ["a3", "2024-03-01", "N", "", "5", "ınr", ""],
+        ],
+    )
+    surrogate, huge, odd_currency = classify_table(table, "UTC", now)
+    # A lone surrogate in the ID is replaced so the row stays storable.
+    assert isinstance(surrogate, Candidate) and surrogate.entry_id == "a1?"
+    assert isinstance(surrogate.result, NewDonation)
+    for o in (huge, odd_currency):
+        assert isinstance(o, Candidate) and isinstance(o.result, Rejection)
+
+
+def test_api_rejects_out_of_range_query_parameters_with_422_not_500(
+    engine: Engine, settings: Settings
+) -> None:
+    from tests.conftest import FAKE_API_TOKEN
+
+    c = TestClient(create_app(settings, engine))
+    h = {"Authorization": f"Bearer {FAKE_API_TOKEN}"}
+    assert c.get("/donations?before_id=99999999999999999999", headers=h).status_code == 422
+    assert c.get("/sync-runs?source=%00", headers=h).status_code == 422
+
+
+def test_invisible_only_names_are_treated_as_anonymous() -> None:
+    from donation_ledger.parsing import normalize_donor_name
+
+    assert normalize_donor_name("​​") is None
+    result = map_payment_intent(payment_intent(metadata={"donor_name": "​"}))
+    assert isinstance(result, NewDonation) and result.donor_name is None

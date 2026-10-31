@@ -127,7 +127,7 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
     def list_donations(
         source: Literal["stripe", "sheet"] | None = None,
         limit: Annotated[int, Query(ge=1, le=200)] = 50,
-        before_id: Annotated[int | None, Query(ge=1)] = None,
+        before_id: Annotated[int | None, Query(ge=1, le=2**63 - 1)] = None,
     ) -> DonationPage:
         stmt = select(Donation).order_by(Donation.id.desc()).limit(limit + 1)
         if source is not None:
@@ -144,7 +144,7 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
     @app.get("/sync-runs", response_model=list[SyncRunOut], dependencies=[Depends(require_token)])
     def list_sync_runs(
         limit: Annotated[int, Query(ge=1, le=200)] = 50,
-        source: str | None = None,
+        source: Literal["sheet", "stripe_reconcile"] | None = None,
     ) -> list[SyncRunOut]:
         stmt = select(SyncRun).order_by(SyncRun.id.desc()).limit(limit)
         if source is not None:

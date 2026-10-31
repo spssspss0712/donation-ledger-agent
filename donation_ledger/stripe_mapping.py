@@ -21,6 +21,7 @@ from donation_ledger.parsing import (
     MAX_NAME_LEN,
     RowError,
     clean_stripe_text,
+    is_visually_empty,
 )
 
 
@@ -152,6 +153,6 @@ def _first_text(*candidates: Any) -> str | None:
     for candidate in candidates:
         if isinstance(candidate, str):
             text = " ".join(candidate.split())
-            if text:
+            if text and not is_visually_empty(text):
                 return text
     return None

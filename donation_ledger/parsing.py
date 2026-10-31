@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
@@ -215,6 +216,11 @@ class RowError(ValueError):
     """A single input row/field is unacceptable. The message is a PII-free reason."""
 
 
+def is_visually_empty(text: str) -> bool:
+    """True for blank text or text made only of whitespace/format chars (e.g. U+200B)."""
+    return all(ch.isspace() or unicodedata.category(ch) == "Cf" for ch in text)
+
+
 def has_nul(text: str) -> bool:
     return "\x00" in text
 
@@ -250,10 +256,12 @@ def minor_units_from_decimal_string(text: str, currency: str) -> int:
 
 
 def normalize_currency(text: str) -> str:
-    code = text.strip().upper()
-    if code == "":
+    raw = text.strip()
+    if raw == "":
         return "USD"
-    if code not in ISO_4217:
+    # Check ASCII before upper(): "\u0131nr".upper() == "INR" would "fix" garbage silently.
+    code = raw.upper()
+    if not raw.isascii() or code not in ISO_4217:
         raise RowError("invalid_currency: not a known ISO 4217 code")
     return code
 
@@ -263,7 +271,7 @@ def normalize_donor_name(text: str) -> str | None:
     if has_nul(text):
         raise RowError("invalid_text: contains NUL character")
     name = " ".join(text.split())
-    if name == "" or name.casefold() == "anonymous":
+    if is_visually_empty(name) or name.casefold() == "anonymous":
         return None
     if len(name) > MAX_NAME_LEN:
         raise RowError("invalid_name: too long")
