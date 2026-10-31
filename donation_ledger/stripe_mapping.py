@@ -37,7 +37,12 @@ def sanitize(value: Any) -> Any:
     if isinstance(value, float) and not math.isfinite(value):
         return str(value)  # JSONB rejects NaN/Infinity tokens
     if isinstance(value, Mapping):
-        return {clean_stripe_text(str(k)): sanitize(v) for k, v in value.items()}
+        return {
+            clean_stripe_text(str(k)): sanitize(v)
+            for k, v in value.items()
+            # Stripe says a PaymentIntent client_secret must not be stored or logged.
+            if "client_secret" not in str(k).lower()
+        }
     if isinstance(value, list | tuple):
         return [sanitize(v) for v in value]
     return value

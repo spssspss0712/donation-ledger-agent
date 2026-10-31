@@ -676,3 +676,36 @@ def test_admin_listing_escapes_control_characters_from_entry_ids() -> None:
     from donation_ledger.admin import _printable
 
     assert _printable("a\x1b[31m\nb") == "a\\x1b[31m\\nb"
+
+
+def test_client_secret_is_never_stored_in_payloads_or_quarantine(engine: Engine) -> None:
+    from sqlalchemy.orm import sessionmaker
+
+    from donation_ledger.webhook import process_event
+
+    sf = sessionmaker(engine)
+    good_pi = payment_intent(
+        "pi_CS1", client_secret="pi_cs1_secret_FAKEFAKE", nested={"client_secret": "x"}
+    )
+    bad_pi = payment_intent("pi_CS2", amount=-1, client_secret="pi_cs2_secret_FAKEFAKE")
+    bad_pi["amount_received"] = -1
+    process_event(sf, event(good_pi))
+    process_event(sf, event(bad_pi, event_id="evt_2"))
+    dump = rows(
+        engine,
+        "SELECT (SELECT string_agg(raw_payload::text,'') FROM donations) || "
+        "(SELECT string_agg(raw_row::text,'') FROM rejected_rows)",
+    )[0][0]
+    assert "secret" not in str(dump).lower()
+
+
+def test_env_example_placeholders_are_rejected_as_real_secrets() -> None:
+    from donation_ledger.config import ConfigError
+
+    for name, value in (
+        ("STRIPE_WEBHOOK_SECRET", "whsec_replace_me"),
+        ("API_TOKEN", "replace-me"),
+        ("STRIPE_API_KEY", "sk_test_replace_me"),
+    ):
+        with pytest.raises(ConfigError):
+            Settings.from_env({"DATABASE_URL": "postgresql://h/d", name: value})

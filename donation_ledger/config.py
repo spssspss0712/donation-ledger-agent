@@ -51,6 +51,11 @@ class Settings:
         database_url = opt("DATABASE_URL")
         if database_url is None:
             raise ConfigError("DATABASE_URL is required")
+        for secret_name in ("STRIPE_WEBHOOK_SECRET", "STRIPE_API_KEY", "API_TOKEN"):
+            raw = (e.get(secret_name) or "").lower()
+            if "replace_me" in raw or "replace-me" in raw:
+                # .env.example placeholders are public: never accept them as real secrets.
+                raise ConfigError(f"{secret_name} still has the .env.example placeholder value")
         api_key = opt("STRIPE_API_KEY")
         # Hard rule of this project: live keys are never accepted.
         if api_key is not None and not api_key.startswith(("sk_test_", "rk_test_")):

@@ -8,6 +8,7 @@ services:
     startCommand: uvicorn donation_ledger.main:create --factory --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     envVars:
+      - {key: PYTHON_VERSION, value: "3.12.7"}
       - key: DATABASE_URL
         fromDatabase: {name: donation-ledger-db, property: connectionString}
       - {key: STRIPE_WEBHOOK_SECRET, sync: false}
@@ -20,6 +21,7 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: python -m donation_ledger.sync
     envVars:
+      - {key: PYTHON_VERSION, value: "3.12.7"}
       - key: DATABASE_URL
         fromDatabase: {name: donation-ledger-db, property: connectionString}
       - {key: SHEET_SOURCE, value: google}
@@ -33,6 +35,7 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: python -m donation_ledger.reconcile
     envVars:
+      - {key: PYTHON_VERSION, value: "3.12.7"}
       - key: DATABASE_URL
         fromDatabase: {name: donation-ledger-db, property: connectionString}
       - {key: STRIPE_API_KEY, sync: false}

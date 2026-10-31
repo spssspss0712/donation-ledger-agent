@@ -56,6 +56,10 @@ Format: context, options, choice, why, how easy to change later.
 - Before the final status update a run row-locks its own `sync_runs` row and aborts if it is no longer `running` (its advisory lock was lost and a newer run already cleaned it up), so a stale run cannot overwrite a live run's bookkeeping. Runs found dead are labelled `partial` when batches had committed (`rows_read > 0`), else `failed`.
 - Zero-decimal currencies accept `5000.00` (trailing zeros only). Stripe ids shorter than `pi_x` are rejected. Hangul-filler style invisible characters (not Cf/whitespace) are not detected (rare).
 
+## D7g. Secrets at rest and in config
+- PaymentIntent `client_secret` (any key containing it) is dropped before storing/fingerprinting. `Settings.__repr__` hides secrets. `.env.example` placeholder values (`replace_me`/`replace-me`) are refused as real secrets, and `SHEET_SOURCE` is commented out there. `Settings.from_env` validates all variables for every entry point (a bad value in a shared env group stops the web service too): chosen for fail-fast simplicity; give each service only the variables it needs.
+- render.yaml pins `PYTHON_VERSION` (code needs 3.12+); cron services have no pre-deploy migration step, so run `alembic upgrade head` via the web service deploy first.
+
 ## D8. Stripe mapping
 - ID = `data.object.id` (`pi_...`). Amount = `amount_received` if positive, else `amount` (the money actually captured is the truthful figure; they differ on partial capture). `created` Unix seconds => UTC.
 - A PaymentIntent has no donor name; read from (expanded) `latest_charge.billing_details` / legacy `charges.data[0]`, then `metadata.donor_name|name`, `shipping.name`; e-mail from billing details, `receipt_email`, `metadata.donor_email|email`. **Assumption** (documented in BLOCKERS.md): the website puts donor info in one of these places. No name => anonymous.
