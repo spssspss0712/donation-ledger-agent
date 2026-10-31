@@ -35,6 +35,7 @@ from donation_ledger.runs import (
     add_counters,
     advisory_lock,
     assert_lock_still_held,
+    assert_run_still_ours,
     fail_stale_runs,
     finish_run,
     safe_error_message,
@@ -124,6 +125,7 @@ def _run_locked(
             committed_batches += 1
         assert_lock_still_held(lock_conn)
         with Session(engine) as session, session.begin():
+            assert_run_still_ours(session, run_id)
             _mark_absent_rejections(session, run_id)
             finish_run(session, run_id, "succeeded", None)
     except (HeaderError, SheetReadError) as exc:

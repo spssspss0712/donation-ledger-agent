@@ -249,7 +249,7 @@ def test_process_killed_with_sigkill_midway_then_rerun_has_no_loss_or_duplicates
     assert result.status == "succeeded"
     assert_complete_and_unduplicated(engine, n)
     statuses = [r[0] for r in rows(engine, "SELECT status FROM sync_runs ORDER BY id")]
-    assert statuses == ["failed", "succeeded"]
+    assert statuses == ["partial", "succeeded"]  # killed after committing batches
 
 
 def test_cli_exit_codes_follow_the_documented_contract(

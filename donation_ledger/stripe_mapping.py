@@ -24,6 +24,7 @@ from donation_ledger.parsing import (
     RowError,
     clean_stripe_text,
     is_visually_empty,
+    strip_invisible,
 )
 
 
@@ -32,7 +33,7 @@ def sanitize(value: Any) -> Any:
     if isinstance(value, str):
         text = clean_stripe_text(value)
         # "Anonymous" is never stored, not even inside raw payloads.
-        return "" if text.strip().casefold() == "anonymous" else text
+        return "" if strip_invisible(text).casefold() == "anonymous" else text
     if isinstance(value, float) and not math.isfinite(value):
         return str(value)  # JSONB rejects NaN/Infinity tokens
     if isinstance(value, Mapping):
@@ -46,7 +47,11 @@ def map_payment_intent(pi: Mapping[str, Any]) -> NewDonation | Rejection:
     safe = sanitize(dict(pi))
     external_id = safe.get("id")
     try:
-        if not isinstance(external_id, str) or not external_id.startswith("pi_"):
+        if (
+            not isinstance(external_id, str)
+            or not external_id.startswith("pi_")
+            or len(external_id) < 4
+        ):
             raise RowError("invalid_payment_intent: id missing or not a pi_ id")
         if len(external_id) > 255:
             raise RowError("invalid_payment_intent: id too long")
@@ -157,7 +162,7 @@ def _first_charge(pi: Mapping[str, Any]) -> Mapping[str, Any] | None:
 def _first_text(*candidates: Any) -> str | None:
     for candidate in candidates:
         if isinstance(candidate, str):
-            text = " ".join(candidate.split())
+            text = " ".join(strip_invisible(candidate).split())
             if text and not is_visually_empty(text):
                 return text
     return None

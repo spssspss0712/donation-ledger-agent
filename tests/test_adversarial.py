@@ -491,23 +491,39 @@ def test_dollar_sign_contradicting_the_currency_is_quarantined(engine: Engine) -
             minor_units_from_decimal_string("$5", cur)
 
 
-def test_sheet_source_must_be_explicit_so_sample_data_never_reaches_a_real_ledger() -> None:
-    from donation_ledger.config import ConfigError
+def test_sheet_source_is_only_required_by_the_sync_job_so_other_services_still_start(
+    engine: Engine,
+) -> None:
+    import os
+    import subprocess
+    import sys
 
+    from donation_ledger.config import ConfigError
+    from donation_ledger.sources import SheetReadError, make_reader
+    from tests.conftest import database_url_for_tests
+
+    base = {"DATABASE_URL": "postgresql://h/d"}
+    cfg = Settings.from_env(base)  # web service / reconcile / admin must load without it
+    with pytest.raises(SheetReadError):
+        make_reader(cfg)  # ... but the sync must never fall back to the sample CSV
     with pytest.raises(ConfigError):
-        Settings.from_env({"DATABASE_URL": "postgresql://h/d"})
-    assert (
-        Settings.from_env({"DATABASE_URL": "postgresql://h/d", "SHEET_SOURCE": "CSV"}).sheet_source
-        == "csv"
+        Settings.from_env({**base, "SHEET_SOURCE": "excel"})
+    assert Settings.from_env({**base, "SHEET_SOURCE": "CSV"}).sheet_source == "csv"
+    with pytest.raises(ConfigError):
+        Settings.from_env({**base, "RECONCILE_LOOKBACK_HOURS": "10000000000"})
+    env = {k: v for k, v in os.environ.items() if k != "SHEET_SOURCE"}
+    env["DATABASE_URL"] = database_url_for_tests()
+    proc = subprocess.run(  # noqa: S603
+        [sys.executable, "-m", "donation_ledger.sync"], env=env, capture_output=True
     )
-    with pytest.raises(ConfigError):
-        Settings.from_env(
-            {
-                "DATABASE_URL": "postgresql://h/d",
-                "SHEET_SOURCE": "csv",
-                "RECONCILE_LOOKBACK_HOURS": "10000000000",
-            }
-        )
+    assert proc.returncode == 1
+    assert rows(engine, "SELECT count(*) FROM donations") == [(0,)]
+    web = subprocess.run(  # noqa: S603
+        [sys.executable, "-c", "from donation_ledger.main import create; create()"],
+        env=env,
+        capture_output=True,
+    )
+    assert web.returncode == 0, web.stderr.decode()[-300:]
 
 
 def test_implausible_stripe_created_dates_are_quarantined_and_api_survives_any_session_timezone(
@@ -562,3 +578,61 @@ def test_client_library_errors_are_stored_as_type_only_so_key_fragments_never_le
 def test_overlong_stripe_email_is_dropped_not_stored() -> None:
     result = map_payment_intent(payment_intent(receipt_email="a" * 900_000 + "@x.org"))
     assert isinstance(result, NewDonation) and result.donor_email is None
+
+
+def test_stripe_anonymous_wrapped_in_invisible_characters_is_still_anonymous() -> None:
+    for name in ("Anonymous\u200b", "\u200bANONYMOUS", "\ufeffanonymous"):
+        result = map_payment_intent(payment_intent(metadata={"donor_name": name}))
+        assert isinstance(result, NewDonation) and result.donor_name is None
+        assert "nonymous" not in str(result.raw_payload).lower()
+
+
+def test_zero_decimal_currency_accepts_trailing_zero_fraction_but_not_real_fractions() -> None:
+    from donation_ledger.parsing import RowError, minor_units_from_decimal_string
+
+    assert minor_units_from_decimal_string("5000.00", "JPY") == 5000
+    assert minor_units_from_decimal_string("$1,000.0", "USD") == 100000
+    for bad in ("5000.50", "1.005"):
+        with pytest.raises(RowError):
+            minor_units_from_decimal_string(bad, "JPY" if bad == "5000.50" else "USD")
+
+
+def test_bare_pi_prefix_is_not_a_valid_payment_intent_id() -> None:
+    assert isinstance(map_payment_intent(payment_intent("pi_")), Rejection)
+    assert isinstance(map_payment_intent(payment_intent("pi_\x00")), Rejection)
+
+
+def test_run_whose_lock_was_lost_cannot_overwrite_a_newer_runs_bookkeeping(engine: Engine) -> None:
+    from sqlalchemy.orm import Session
+
+    from donation_ledger.runs import assert_run_still_ours, fail_stale_runs, start_run
+
+    with Session(engine) as s, s.begin():
+        old = start_run(s, "sheet")
+    with Session(engine) as s, s.begin():
+        fail_stale_runs(s, "sheet")  # what a newer lock holder does to the old run
+    with pytest.raises(RuntimeError), Session(engine) as s, s.begin():
+        assert_run_still_ours(s, old)
+    assert rows(engine, "SELECT status FROM sync_runs") == [("failed",)]
+
+
+def test_reconcile_does_not_reopen_a_rejection_for_a_payment_already_in_the_ledger(
+    engine: Engine,
+) -> None:
+    from datetime import timedelta
+
+    from donation_ledger.reconcile import run_reconcile
+
+    class Source:
+        def __init__(self, items: list[dict[str, Any]]) -> None:
+            self.items = items
+
+        def list_since(self, created_gte: Any) -> Any:
+            return self.items
+
+    run_reconcile(engine, Source([payment_intent("pi_G")]), timedelta(hours=1))
+    bad = payment_intent("pi_G")
+    bad["amount_received"] = 0
+    res = run_reconcile(engine, Source([bad]), timedelta(hours=1))
+    assert res.counters.rows_quarantined == 0
+    assert rows(engine, "SELECT count(*) FROM rejected_rows") == [(0,)]

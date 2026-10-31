@@ -27,6 +27,7 @@ from donation_ledger.runs import (
     add_counters,
     advisory_lock,
     assert_lock_still_held,
+    assert_run_still_ours,
     fail_stale_runs,
     finish_run,
     safe_error_message,
@@ -34,6 +35,7 @@ from donation_ledger.runs import (
 )
 from donation_ledger.stripe_mapping import map_payment_intent
 from donation_ledger.sync import EXIT_FAILED, EXIT_LOCKED, EXIT_OK, SyncResult, chunks
+from donation_ledger.webhook import donation_exists
 
 log = logging.getLogger(__name__)
 
@@ -108,6 +110,7 @@ def _run_locked(
             counters.add(batch_counters)
             committed += 1
         with Session(engine) as session, session.begin():
+            assert_run_still_ours(session, run_id)
             finish_run(session, run_id, "succeeded", None)
     except Exception as exc:  # noqa: BLE001
         status = "partial" if committed else "failed"
@@ -130,7 +133,9 @@ def _process(session: Session, batch: Sequence[Mapping[str, Any]], run_id: int) 
     for pi in batch:
         mapped = map_payment_intent(pi)
         if isinstance(mapped, Rejection):
-            if record_rejection(session, mapped, run_id) == "ignored":
+            if mapped.external_id and donation_exists(session, mapped.external_id):
+                c.rows_duplicate_skipped += 1  # stale bad snapshot of a payment we hold
+            elif record_rejection(session, mapped, run_id) == "ignored":
                 c.rows_ignored += 1
             else:
                 c.rows_quarantined += 1

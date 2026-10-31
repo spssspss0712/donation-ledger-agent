@@ -28,7 +28,7 @@ class Settings:
     stripe_webhook_secret: str | None = None
     stripe_api_key: str | None = None
     sheet_timezone: str = "America/Los_Angeles"
-    sheet_source: str = "csv"  # dataclass default only; from_env requires an explicit value
+    sheet_source: str | None = None  # only the sheet sync needs it; make_reader enforces
     sheet_csv_path: str = "sample_data/sheet.csv"
     google_sheet_id: str | None = None
     google_worksheet: str | None = None
@@ -62,9 +62,9 @@ class Settings:
             raise ConfigError(f"SHEET_TIMEZONE is not a valid IANA zone: {tz!r}") from exc
         # No default on purpose: forgetting it must not silently sync the bundled sample CSV
         # (fake donors) into a real ledger.
-        source = (opt("SHEET_SOURCE") or "").lower()
-        if source not in ("csv", "google"):
-            raise ConfigError("SHEET_SOURCE must be set to 'csv' or 'google'")
+        source = (opt("SHEET_SOURCE") or "").lower() or None
+        if source not in (None, "csv", "google"):
+            raise ConfigError("SHEET_SOURCE must be 'csv' or 'google'")
         return cls(
             database_url=normalize_database_url(database_url),
             stripe_webhook_secret=opt("STRIPE_WEBHOOK_SECRET"),

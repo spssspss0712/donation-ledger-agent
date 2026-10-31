@@ -73,7 +73,7 @@ def process_event(session_factory: sessionmaker[Session], event: Mapping[str, An
         )
     with session_factory() as session, session.begin():
         if isinstance(mapped, Rejection):
-            if mapped.external_id and _donation_exists(session, mapped.external_id):
+            if mapped.external_id and donation_exists(session, mapped.external_id):
                 # A stale bad snapshot of a payment we already hold: same result as a duplicate.
                 return Outcome.DUPLICATE
             record_rejection(session, mapped, run_id=None)
@@ -95,7 +95,7 @@ def process_event(session_factory: sessionmaker[Session], event: Mapping[str, An
     return outcome
 
 
-def _donation_exists(session: Session, external_id: str) -> bool:
+def donation_exists(session: Session, external_id: str) -> bool:
     stmt = select(Donation.id).where(
         Donation.source == SOURCE_STRIPE, Donation.external_id == external_id
     )

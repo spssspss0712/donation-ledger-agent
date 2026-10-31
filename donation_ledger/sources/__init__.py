@@ -10,6 +10,8 @@ __all__ = ["CsvSheetReader", "SheetReadError", "SheetReader", "SheetTable", "mak
 
 
 def make_reader(settings: Settings) -> SheetReader:
+    if settings.sheet_source not in ("csv", "google"):
+        raise SheetReadError("SHEET_SOURCE must be set to 'csv' or 'google'")
     if settings.sheet_source == "csv":
         return CsvSheetReader(settings.sheet_csv_path)
     # Imported lazily so offline use never needs Google libraries to load.

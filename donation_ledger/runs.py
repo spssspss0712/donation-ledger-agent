@@ -91,13 +91,23 @@ def fail_stale_runs(session: Session, source: str) -> int:
     """Only call while holding the lock: any 'running' row is then a crashed predecessor."""
     result = session.execute(
         text(
-            "UPDATE sync_runs SET status='failed', finished_at=now(), "
+            "UPDATE sync_runs SET status=CASE WHEN rows_read > 0 THEN 'partial' ELSE 'failed' END, "
+            "finished_at=now(), "
             "error_message='run did not finish (process crashed or was killed)' "
             "WHERE source=:s AND status='running'"
         ),
         {"s": source},
     )
     return int(result.rowcount or 0)  # type: ignore[attr-defined]
+
+
+def assert_run_still_ours(session: Session, run_id: int) -> None:
+    """Row-lock our run row and make sure nobody superseded it (lost lock => stale cleanup)."""
+    status = session.execute(
+        text("SELECT status FROM sync_runs WHERE id=:i FOR UPDATE"), {"i": run_id}
+    ).scalar_one_or_none()
+    if status != "running":
+        raise RuntimeError("run was superseded by another process (advisory lock lost)")
 
 
 def start_run(session: Session, source: str) -> int:

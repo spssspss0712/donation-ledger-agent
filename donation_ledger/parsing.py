@@ -288,7 +288,9 @@ def minor_units_from_decimal_string(text: str, currency: str) -> int:
     if len(match.group("int")) > 25:  # before Decimal/int: huge digit strings are quadratic
         raise RowError("invalid_amount: implausibly large")
     if len(frac) > exponent:
-        raise RowError(f"invalid_amount: more than {exponent} decimal places for {currency}")
+        if frac[exponent:].strip("0"):  # "5000.00" for JPY is fine; "10.50" is not
+            raise RowError(f"invalid_amount: more than {exponent} decimal places for {currency}")
+        frac = frac[:exponent]
     try:
         value = Decimal(match.group("int").replace(",", "") + ("." + frac if frac else ""))
     except InvalidOperation as exc:  # pragma: no cover - regex already guarantees digits

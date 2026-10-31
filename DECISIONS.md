@@ -51,6 +51,11 @@ Format: context, options, choice, why, how easy to change later.
 ## D7e. Fail-closed configuration
 - `SHEET_SOURCE` has no default (a forgotten setting must never ingest the bundled sample CSV into a real ledger). `RECONCILE_LOOKBACK_HOURS` is capped at one year. DB sessions are pinned to `timezone=UTC`, and Stripe `created` must be within 2000-01-01..now+2 days, because one absurd timestamp otherwise made `GET /donations` fail for the page containing it. Client-library (Stripe/Google/HTTP) exceptions are stored by type only (their messages can echo key fragments). A stale bad snapshot of a payment already in the ledger is answered as a duplicate and does not reopen its rejection.
 
+## D7f. Review-7 fixes
+- `SHEET_SOURCE` is validated only when the sheet reader is built (the web service, reconcile and admin CLI must start without it; my earlier fail-closed change broke them - found by review and covered by a test that runs `create()` and the sync CLI without it).
+- Before the final status update a run row-locks its own `sync_runs` row and aborts if it is no longer `running` (its advisory lock was lost and a newer run already cleaned it up), so a stale run cannot overwrite a live run's bookkeeping. Runs found dead are labelled `partial` when batches had committed (`rows_read > 0`), else `failed`.
+- Zero-decimal currencies accept `5000.00` (trailing zeros only). Stripe ids shorter than `pi_x` are rejected. Hangul-filler style invisible characters (not Cf/whitespace) are not detected (rare).
+
 ## D8. Stripe mapping
 - ID = `data.object.id` (`pi_...`). Amount = `amount_received` if positive, else `amount` (the money actually captured is the truthful figure; they differ on partial capture). `created` Unix seconds => UTC.
 - A PaymentIntent has no donor name; read from (expanded) `latest_charge.billing_details` / legacy `charges.data[0]`, then `metadata.donor_name|name`, `shipping.name`; e-mail from billing details, `receipt_email`, `metadata.donor_email|email`. **Assumption** (documented in BLOCKERS.md): the website puts donor info in one of these places. No name => anonymous.
