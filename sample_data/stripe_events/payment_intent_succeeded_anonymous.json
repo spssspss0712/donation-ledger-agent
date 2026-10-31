@@ -1,0 +1,1 @@
+{"id":"evt_FAKE_sample_0002","object":"event","type":"payment_intent.succeeded","created":1735000101,"data":{"object":{"id":"pi_FAKE_sample_0002","object":"payment_intent","amount":10000,"amount_received":10000,"currency":"usd","created":1735000100,"status":"succeeded"}}}

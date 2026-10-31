@@ -1,0 +1,1 @@
+{"id":"evt_FAKE_sample_0003","object":"event","type":"charge.refunded","created":1735000201,"data":{"object":{"id":"ch_FAKE_sample_0001","object":"charge","amount_refunded":2500}}}

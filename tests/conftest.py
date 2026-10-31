@@ -21,13 +21,13 @@ FAKE_WEBHOOK_SECRET = "whsec_FAKE_test_secret_not_real"  # noqa: S105
 FAKE_API_TOKEN = "FAKE-api-token-for-tests"  # noqa: S105
 
 
-def test_database_url() -> str:
+def database_url_for_tests() -> str:
     return normalize_database_url(os.environ.get("TEST_DATABASE_URL", DEFAULT_TEST_URL))
 
 
 @pytest.fixture(scope="session")
 def engine() -> Iterator[Engine]:
-    url = test_database_url()
+    url = database_url_for_tests()
     eng = make_engine(url)
     with eng.begin() as conn:
         conn.execute(text("DROP SCHEMA public CASCADE"))
@@ -58,7 +58,7 @@ def session_factory(engine: Engine) -> sessionmaker[Session]:
 @pytest.fixture
 def settings() -> Settings:
     return Settings(
-        database_url=test_database_url(),
+        database_url=database_url_for_tests(),
         stripe_webhook_secret=FAKE_WEBHOOK_SECRET,
         api_token=FAKE_API_TOKEN,
         sync_batch_size=500,
