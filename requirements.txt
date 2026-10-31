@@ -1,0 +1,9 @@
+# Runtime dependencies, exact pins. Justifications are in DECISIONS.md.
+fastapi==0.162.0
+uvicorn==0.54.0
+SQLAlchemy==2.1.6
+alembic==1.20.1
+psycopg[binary]==3.3.6
+pydantic==2.14.2
+stripe==16.1.0
+gspread==6.2.1
