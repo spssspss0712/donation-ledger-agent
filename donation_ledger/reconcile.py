@@ -18,9 +18,15 @@ from sqlalchemy.orm import Session
 
 from donation_ledger.config import ConfigError, Settings
 from donation_ledger.db import make_engine
-from donation_ledger.ledger import NewDonation, Rejection, insert_donations, record_rejection
+from donation_ledger.ledger import (
+    NewDonation,
+    Rejection,
+    insert_donations,
+    lock_external_ids,
+    record_rejection,
+)
 from donation_ledger.logging_setup import configure_logging
-from donation_ledger.models import RUN_STRIPE_RECONCILE
+from donation_ledger.models import RUN_STRIPE_RECONCILE, SOURCE_STRIPE
 from donation_ledger.runs import (
     Counters,
     LockNotAcquiredError,
@@ -130,8 +136,9 @@ def _process(session: Session, batch: Sequence[Mapping[str, Any]], run_id: int) 
     c = Counters(rows_read=len(batch))
     donations: list[NewDonation] = []
     seen: set[str] = set()
-    for pi in batch:
-        mapped = map_payment_intent(pi)
+    mapped_all = [map_payment_intent(pi) for pi in batch]
+    lock_external_ids(session, SOURCE_STRIPE, [m.external_id for m in mapped_all])
+    for mapped in mapped_all:
         if isinstance(mapped, Rejection):
             if mapped.external_id and donation_exists(session, mapped.external_id):
                 c.rows_duplicate_skipped += 1  # stale bad snapshot of a payment we hold

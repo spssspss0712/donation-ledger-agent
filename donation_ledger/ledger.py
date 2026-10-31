@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import case, func, update
+from sqlalchemy import case, func, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -58,6 +58,20 @@ def fingerprint_of(value: Any) -> str:
     """Stable identity of a rejected input (independent of row position)."""
     blob = json.dumps(value, sort_keys=True, ensure_ascii=True, separators=(",", ":"), default=str)
     return hashlib.sha256(blob.encode("ascii")).hexdigest()
+
+
+def lock_external_ids(session: Session, source: str, ids: Iterable[str | None]) -> None:
+    """Serialise writers of the same payment (transaction-scoped advisory locks).
+
+    Without it a "bad snapshot" rejection and the good insert of one payment can interleave
+    and leave an open rejection next to its donation. Always taken in sorted order, and a
+    webhook holds only one, so there is no lock cycle.
+    """
+    for ext in sorted({i for i in ids if i}):
+        session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:k, 0))"),
+            {"k": f"{source}:{ext}"},
+        )
 
 
 def insert_donations(session: Session, items: Sequence[NewDonation]) -> set[str]:

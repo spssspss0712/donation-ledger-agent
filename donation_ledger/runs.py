@@ -120,7 +120,9 @@ def start_run(session: Session, source: str) -> int:
 def finish_run(session: Session, run_id: int, status: str, message: str | None) -> None:
     session.execute(
         update(SyncRun)
-        .where(SyncRun.id == run_id)
+        # Never overwrite a finished row: an ambiguous COMMIT (ack lost) must not turn a
+        # recorded success into "partial", and a superseded run must not touch the newer state.
+        .where(SyncRun.id == run_id, SyncRun.status == "running")
         .values(status=status, error_message=message, finished_at=text("now()"))
     )
 

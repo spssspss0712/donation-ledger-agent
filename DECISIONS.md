@@ -63,6 +63,9 @@ Format: context, options, choice, why, how easy to change later.
 ## D7h. Round 9a
 - An edit that turns a synced entry into a rejected row (duplicate ID, short/long row, bad bytes) records a `changed_after_sync` issue too. Entry IDs are NFC-normalised. A fraction of 3+ digits in a non-zero-decimal currency (`1.000` EUR) is quarantined, since it may be a thousands separator; only `5000.00` for zero-decimal currencies is tolerated. ISK/UGX follow Stripe (2 decimals), not ISO 4217. Addresses are stored whitespace-collapsed (original text stays in `raw_payload.fields`).
 
+## D7i. Round 9b
+- Webhook and reconcile take a transaction-scoped advisory lock per Stripe payment ID (sorted order) before reading/writing, so a bad and a good snapshot of one payment can't leave an open rejection beside its donation (396/400 race outcomes before; 0 after, covered by a test that fails with the lock disabled). `finish_run` only updates rows still `running`, so an ambiguous COMMIT cannot overwrite a recorded success.
+
 ## D8. Stripe mapping
 - ID = `data.object.id` (`pi_...`). Amount = `amount_received` if positive, else `amount` (the money actually captured is the truthful figure; they differ on partial capture). `created` Unix seconds => UTC.
 - A PaymentIntent has no donor name; read from (expanded) `latest_charge.billing_details` / legacy `charges.data[0]`, then `metadata.donor_name|name`, `shipping.name`; e-mail from billing details, `receipt_email`, `metadata.donor_email|email`. **Assumption** (documented in BLOCKERS.md): the website puts donor info in one of these places. No name => anonymous.

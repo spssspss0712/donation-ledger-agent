@@ -742,3 +742,58 @@ def test_three_digit_fraction_in_a_two_decimal_currency_is_quarantined() -> None
         with pytest.raises(RowError):
             minor_units_from_decimal_string(amount, "EUR")
     assert minor_units_from_decimal_string("5000.00", "JPY") == 5000
+
+
+def test_bad_and_good_snapshots_of_one_payment_racing_never_leave_an_open_rejection(
+    engine: Engine,
+) -> None:
+    import threading
+
+    from sqlalchemy.orm import sessionmaker
+
+    from donation_ledger.webhook import process_event
+
+    sf = sessionmaker(engine)
+    leftovers = 0
+    for i in range(40):
+        pid = f"pi_RACE{i}"
+        bad = payment_intent(pid)
+        bad["amount_received"] = 0
+        barrier = threading.Barrier(2)
+
+        def run(obj: dict[str, Any], evt: str, b: threading.Barrier = barrier) -> None:
+            b.wait()
+            process_event(sf, event(obj, event_id=evt))
+
+        ts = [
+            threading.Thread(target=run, args=(bad, f"b{i}")),
+            threading.Thread(target=run, args=(payment_intent(pid), f"g{i}")),
+        ]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join()
+        leftovers += int(
+            str(
+                rows(
+                    engine,
+                    f"SELECT count(*) FROM rejected_rows WHERE external_id='{pid}' AND status='open'",
+                )[0][0]
+            )
+        )
+    assert rows(engine, "SELECT count(*) FROM donations") == [(40,)]
+    # Either order is fine; what must never happen is open-rejection + donation together.
+    assert leftovers == 0
+
+
+def test_an_ambiguous_commit_cannot_overwrite_a_recorded_success(engine: Engine) -> None:
+    from sqlalchemy.orm import Session
+
+    from donation_ledger.runs import finish_run, start_run
+
+    with Session(engine) as s, s.begin():
+        run = start_run(s, "sheet")
+        finish_run(s, run, "succeeded", None)
+    with Session(engine) as s, s.begin():
+        finish_run(s, run, "partial", "simulated lost ack")
+    assert rows(engine, "SELECT status, error_message FROM sync_runs") == [("succeeded", None)]

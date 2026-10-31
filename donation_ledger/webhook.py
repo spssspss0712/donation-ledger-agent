@@ -12,7 +12,13 @@ import stripe
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from donation_ledger.ledger import Rejection, fingerprint_of, insert_donations, record_rejection
+from donation_ledger.ledger import (
+    Rejection,
+    fingerprint_of,
+    insert_donations,
+    lock_external_ids,
+    record_rejection,
+)
 from donation_ledger.models import SOURCE_STRIPE, Donation
 from donation_ledger.stripe_mapping import map_payment_intent, sanitize
 
@@ -72,6 +78,7 @@ def process_event(session_factory: sessionmaker[Session], event: Mapping[str, An
             fingerprint=fingerprint_of(safe),
         )
     with session_factory() as session, session.begin():
+        lock_external_ids(session, SOURCE_STRIPE, [mapped.external_id])
         if isinstance(mapped, Rejection):
             if mapped.external_id and donation_exists(session, mapped.external_id):
                 # A stale bad snapshot of a payment we already hold: same result as a duplicate.
