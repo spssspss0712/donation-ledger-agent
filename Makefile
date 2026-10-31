@@ -6,7 +6,7 @@ export DEMO_DATABASE_URL ?= postgresql+psycopg://ledger:ledger@localhost:5432/le
 .PHONY: install db test lint typecheck audit demo migrate check
 
 install:
-	$(PY) -m pip install -r requirements-dev.txt
+	$(PY) -m pip install -c constraints.txt -r requirements-dev.txt
 
 db:  ## start a local PostgreSQL with the three databases used here
 	docker compose up -d db

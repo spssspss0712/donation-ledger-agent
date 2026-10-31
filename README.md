@@ -44,7 +44,7 @@ Requirements: Python 3.12+, PostgreSQL 16 (Docker is the easiest way).
 
 ```bash
 python -m venv .venv && . .venv/bin/activate
-make install
+make install      # pinned runtime deps + constraints.txt for transitive versions
 make db            # docker compose: PostgreSQL with the ledger, ledger_test and ledger_demo databases
 ```
 
@@ -84,7 +84,7 @@ make check         # ruff, ruff format --check, mypy --strict, pytest
 make audit         # pip-audit on the pinned runtime dependencies
 ```
 
-Tests need a real PostgreSQL at `TEST_DATABASE_URL` (default `.../ledger_test`; its `public` schema is **dropped and recreated** by the test session, so never point it at real data). Stripe and Google are never contacted: events are signed offline with the documented HMAC scheme and verified by the Stripe SDK's `Webhook.construct_event`.
+Run one test session at a time per database (some tests assert that no advisory locks are held). Tests need a real PostgreSQL at `TEST_DATABASE_URL` (default `.../ledger_test`; its `public` schema is **dropped and recreated** by the test session, so never point it at real data). Stripe and Google are never contacted: events are signed offline with the documented HMAC scheme and verified by the Stripe SDK's `Webhook.construct_event`.
 
 ## Design trade-offs
 

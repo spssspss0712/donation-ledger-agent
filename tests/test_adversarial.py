@@ -797,3 +797,15 @@ def test_an_ambiguous_commit_cannot_overwrite_a_recorded_success(engine: Engine)
     with Session(engine) as s, s.begin():
         finish_run(s, run, "partial", "simulated lost ack")
     assert rows(engine, "SELECT status, error_message FROM sync_runs") == [("succeeded", None)]
+
+
+def test_reexporting_an_entry_id_in_decomposed_unicode_raises_no_change_warning(
+    engine: Engine,
+) -> None:
+    from donation_ledger.sync import run_sync
+    from tests.test_sync import TZ, ListReader, good
+
+    run_sync(engine, ListReader([good("Café-1")]), TZ)
+    run_sync(engine, ListReader([good("Café-1")]), TZ)
+    assert rows(engine, "SELECT count(*) FROM sync_issues") == [(0,)]
+    assert rows(engine, "SELECT count(*) FROM donations") == [(1,)]

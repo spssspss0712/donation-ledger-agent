@@ -98,11 +98,18 @@ def main() -> int:
         )
         print(f"delivery #{attempt}: HTTP {resp.status_code} {resp.json()}")
     print(f"donations rows: {count(engine, 'donations')}  (expected 1)")
-    anon = (SAMPLES / "stripe_events" / "charge_refunded.json").read_bytes()
+    anon_body = (SAMPLES / "stripe_events" / "payment_intent_succeeded_anonymous.json").read_bytes()
     resp = client.post(
         "/webhooks/stripe",
-        content=anon,
-        headers={"Stripe-Signature": sign(anon, DEMO_WEBHOOK_SECRET)},
+        content=anon_body,
+        headers={"Stripe-Signature": sign(anon_body, DEMO_WEBHOOK_SECRET)},
+    )
+    print(f"a second payment with no donor name: HTTP {resp.status_code} {resp.json()}")
+    refund = (SAMPLES / "stripe_events" / "charge_refunded.json").read_bytes()
+    resp = client.post(
+        "/webhooks/stripe",
+        content=refund,
+        headers={"Stripe-Signature": sign(refund, DEMO_WEBHOOK_SECRET)},
     )
     print(
         f"refund event (out of scope): HTTP {resp.status_code}, donations still {count(engine, 'donations')}"

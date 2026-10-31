@@ -177,6 +177,7 @@ def _classify_row(
             f"duplicate_entry_id: appears {id_counts[entry_id]} times in the sheet", entry_id
         )
     fields = {f: _safe_cell(strip_invisible(cell(f))) for f in REQUIRED_COLUMNS}
+    fields["entry_id"] = entry_id  # normalised form, so re-encoded IDs raise no warning
     if fields["donor_name"].casefold() == "anonymous":
         fields["donor_name"] = ""
     result = _build_donation(entry_id, fields, raw, number, tz_name, now)
