@@ -42,4 +42,7 @@ class GoogleSheetReader:
             raise SheetReadError(f"cannot read Google Sheet: {type(exc).__name__}") from exc
         if not values:
             raise SheetReadError("worksheet is empty (no header row)")
-        return SheetTable(header=values[0], rows=values[1:])
+        width = len(values[0])
+        # The API trims trailing empty cells; pad so short rows mean "blank", not "truncated".
+        rows = [[*r, *([""] * (width - len(r)))] if len(r) < width else r for r in values[1:]]
+        return SheetTable(header=values[0], rows=rows)

@@ -257,7 +257,12 @@ def test_cli_exit_codes_follow_the_documented_contract(
 ) -> None:
     data = tmp_path / "sheet.csv"
     data.write_text(",".join(HEADER) + "\n" + ",".join(good("CLI1")) + "\n", encoding="utf-8")
-    env = {**os.environ, "DATABASE_URL": database_url_for_tests(), "SHEET_CSV_PATH": str(data)}
+    env = {
+        **os.environ,
+        "DATABASE_URL": database_url_for_tests(),
+        "SHEET_SOURCE": "csv",
+        "SHEET_CSV_PATH": str(data),
+    }
     ok = subprocess.run(
         [sys.executable, "-m", "donation_ledger.sync"], env=env, capture_output=True
     )  # noqa: S603

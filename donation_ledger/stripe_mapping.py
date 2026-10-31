@@ -16,9 +16,11 @@ from typing import Any
 from donation_ledger.ledger import NewDonation, Rejection, fingerprint_of
 from donation_ledger.models import SOURCE_STRIPE
 from donation_ledger.parsing import (
+    FUTURE_SLACK,
     ISO_4217,
     MAX_AMOUNT_MINOR,
     MAX_NAME_LEN,
+    MIN_DATE,
     RowError,
     clean_stripe_text,
     is_visually_empty,
@@ -108,9 +110,12 @@ def _created(value: Any) -> datetime:
     if isinstance(value, bool) or not isinstance(value, int | float):
         raise RowError("invalid_created: missing or not a Unix timestamp")
     try:
-        return datetime.fromtimestamp(value, tz=UTC)
+        moment = datetime.fromtimestamp(value, tz=UTC)
     except (OverflowError, OSError, ValueError) as exc:
         raise RowError("invalid_created: out of range") from exc
+    if moment < MIN_DATE or moment > datetime.now(UTC) + FUTURE_SLACK:
+        raise RowError("invalid_created: outside plausible range")
+    return moment
 
 
 def _donor(pi: Mapping[str, Any]) -> tuple[str | None, str | None]:
@@ -133,7 +138,7 @@ def _donor(pi: Mapping[str, Any]) -> tuple[str | None, str | None]:
     if name is not None and (name.casefold() == "anonymous" or len(name) > MAX_NAME_LEN):
         name = None if name.casefold() == "anonymous" else name[:MAX_NAME_LEN]
     if email is not None:
-        email = email.lower() if "@" in email else None
+        email = email.lower() if "@" in email and len(email) <= 320 else None
     return name, email
 
 

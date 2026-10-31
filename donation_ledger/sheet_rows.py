@@ -145,6 +145,10 @@ def _classify_row(
     entry_id = _safe_cell(strip_invisible(cell("entry_id")))
     if len(cells) > width and any(strip_invisible(c) for c in cells[width:]):
         return reject("malformed_row: more cells than header columns", entry_id)
+    if len(cells) < width:
+        # A cut-off line (interrupted export) would otherwise parse as a smaller donation
+        # that the append-only ledger could never correct. Readers must pad blank cells.
+        return reject("malformed_row: fewer cells than header columns", entry_id)
     if any("\ufffd" in c for c in cells):
         # Produced by the CSV reader for undecodable bytes: storing it would be permanent
         # corruption, and a later UTF-8 re-export would then insert the donation twice.

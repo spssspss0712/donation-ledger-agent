@@ -17,7 +17,7 @@ def make_engine(database_url: str) -> Engine:
         max_overflow=10,
         connect_args={
             "connect_timeout": 10,
-            "options": "-c statement_timeout=120000 -c lock_timeout=30000",
+            "options": "-c statement_timeout=120000 -c lock_timeout=30000 -c timezone=UTC",
         },
     )
 

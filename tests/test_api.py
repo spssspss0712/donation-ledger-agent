@@ -208,7 +208,7 @@ def test_webhook_and_sync_logs_do_not_contain_donor_pii(
 
 
 def test_config_refuses_live_stripe_keys_and_bad_timezones() -> None:
-    base = {"DATABASE_URL": "postgres://u:p@h/db"}
+    base = {"DATABASE_URL": "postgres://u:p@h/db", "SHEET_SOURCE": "csv"}
     with pytest.raises(ConfigError):
         Settings.from_env({**base, "STRIPE_API_KEY": "sk_live_FAKE"})
     with pytest.raises(ConfigError):

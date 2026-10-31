@@ -28,7 +28,7 @@ class Settings:
     stripe_webhook_secret: str | None = None
     stripe_api_key: str | None = None
     sheet_timezone: str = "America/Los_Angeles"
-    sheet_source: str = "csv"
+    sheet_source: str = "csv"  # dataclass default only; from_env requires an explicit value
     sheet_csv_path: str = "sample_data/sheet.csv"
     google_sheet_id: str | None = None
     google_worksheet: str | None = None
@@ -60,9 +60,11 @@ class Settings:
             ZoneInfo(tz)
         except (ZoneInfoNotFoundError, ValueError) as exc:
             raise ConfigError(f"SHEET_TIMEZONE is not a valid IANA zone: {tz!r}") from exc
-        source = (opt("SHEET_SOURCE") or cls.sheet_source).lower()
+        # No default on purpose: forgetting it must not silently sync the bundled sample CSV
+        # (fake donors) into a real ledger.
+        source = (opt("SHEET_SOURCE") or "").lower()
         if source not in ("csv", "google"):
-            raise ConfigError("SHEET_SOURCE must be 'csv' or 'google'")
+            raise ConfigError("SHEET_SOURCE must be set to 'csv' or 'google'")
         return cls(
             database_url=normalize_database_url(database_url),
             stripe_webhook_secret=opt("STRIPE_WEBHOOK_SECRET"),
@@ -92,6 +94,8 @@ def _positive_int(env: Mapping[str, str], name: str, default: int) -> int:
         raise ConfigError(f"{name} must be an integer") from exc
     if value < 1:
         raise ConfigError(f"{name} must be >= 1")
+    if name == "RECONCILE_LOOKBACK_HOURS" and value > 24 * 365:
+        raise ConfigError("RECONCILE_LOOKBACK_HOURS must be <= 8760 (one year)")
     if name == "SYNC_BATCH_SIZE" and value > MAX_BATCH_SIZE:
         # One multi-row INSERT binds ~11 parameters per row; PostgreSQL allows 65535.
         raise ConfigError(f"SYNC_BATCH_SIZE must be <= {MAX_BATCH_SIZE}")

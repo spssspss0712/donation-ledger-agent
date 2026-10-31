@@ -9,10 +9,11 @@ from collections.abc import Mapping
 from typing import Any
 
 import stripe
+from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from donation_ledger.ledger import Rejection, fingerprint_of, insert_donations, record_rejection
-from donation_ledger.models import SOURCE_STRIPE
+from donation_ledger.models import SOURCE_STRIPE, Donation
 from donation_ledger.stripe_mapping import map_payment_intent, sanitize
 
 log = logging.getLogger(__name__)
@@ -72,6 +73,9 @@ def process_event(session_factory: sessionmaker[Session], event: Mapping[str, An
         )
     with session_factory() as session, session.begin():
         if isinstance(mapped, Rejection):
+            if mapped.external_id and _donation_exists(session, mapped.external_id):
+                # A stale bad snapshot of a payment we already hold: same result as a duplicate.
+                return Outcome.DUPLICATE
             record_rejection(session, mapped, run_id=None)
             log.warning(
                 "stripe event quarantined",
@@ -89,6 +93,13 @@ def process_event(session_factory: sessionmaker[Session], event: Mapping[str, An
         },
     )
     return outcome
+
+
+def _donation_exists(session: Session, external_id: str) -> bool:
+    stmt = select(Donation.id).where(
+        Donation.source == SOURCE_STRIPE, Donation.external_id == external_id
+    )
+    return session.execute(stmt).first() is not None
 
 
 def _s(value: Any) -> str | None:

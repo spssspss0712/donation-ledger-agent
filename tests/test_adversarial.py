@@ -489,3 +489,76 @@ def test_dollar_sign_contradicting_the_currency_is_quarantined(engine: Engine) -
     for cur in ("GBP", "JPY", "EUR"):
         with pytest.raises(RowError):
             minor_units_from_decimal_string("$5", cur)
+
+
+def test_sheet_source_must_be_explicit_so_sample_data_never_reaches_a_real_ledger() -> None:
+    from donation_ledger.config import ConfigError
+
+    with pytest.raises(ConfigError):
+        Settings.from_env({"DATABASE_URL": "postgresql://h/d"})
+    assert (
+        Settings.from_env({"DATABASE_URL": "postgresql://h/d", "SHEET_SOURCE": "CSV"}).sheet_source
+        == "csv"
+    )
+    with pytest.raises(ConfigError):
+        Settings.from_env(
+            {
+                "DATABASE_URL": "postgresql://h/d",
+                "SHEET_SOURCE": "csv",
+                "RECONCILE_LOOKBACK_HOURS": "10000000000",
+            }
+        )
+
+
+def test_implausible_stripe_created_dates_are_quarantined_and_api_survives_any_session_timezone(
+    engine: Engine, settings: Settings
+) -> None:
+    from tests.conftest import FAKE_API_TOKEN
+
+    c = TestClient(create_app(settings, engine))
+    for pid, created in (("pi_Y1", -62135596800), ("pi_Y9999", 253402300799)):
+        body = encode(event(payment_intent(pid, created=created)))
+        hdr = {"Stripe-Signature": sign(body, FAKE_WEBHOOK_SECRET)}
+        assert c.post("/webhooks/stripe", content=body, headers=hdr).status_code == 200
+    assert rows(engine, "SELECT count(*) FROM donations") == [(0,)]
+    assert rows(engine, "SELECT count(*) FROM rejected_rows") == [(2,)]
+    with engine.connect() as conn:
+        assert conn.execute(text("SHOW timezone")).scalar_one() == "UTC"
+    assert (
+        c.get("/donations", headers={"Authorization": f"Bearer {FAKE_API_TOKEN}"}).status_code
+        == 200
+    )
+
+
+def test_stale_bad_snapshot_of_an_existing_payment_is_a_plain_duplicate_and_does_not_reopen_anything(
+    engine: Engine, settings: Settings
+) -> None:
+    c = TestClient(create_app(settings, engine))
+
+    def deliver(obj: dict[str, Any], evt: str) -> Any:
+        body = encode(event(obj, event_id=evt))
+        hdr = {"Stripe-Signature": sign(body, FAKE_WEBHOOK_SECRET)}
+        return c.post("/webhooks/stripe", content=body, headers=hdr).json()
+
+    bad = payment_intent("pi_STALE")
+    bad["amount_received"] = 0
+    assert deliver(bad, "e1") == {"status": "quarantined"}
+    assert deliver(payment_intent("pi_STALE"), "e2") == {"status": "created"}
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE rejected_rows SET status='resolved'"))
+    assert deliver(bad, "e1") == {"status": "duplicate"}
+    assert rows(engine, "SELECT status FROM rejected_rows") == [("resolved",)]
+
+
+def test_client_library_errors_are_stored_as_type_only_so_key_fragments_never_leak() -> None:
+    import stripe
+
+    from donation_ledger.runs import safe_error_message
+
+    err = stripe.AuthenticationError("Invalid API Key provided: sk_test_****abCd")
+    assert safe_error_message(err) == "AuthenticationError"
+
+
+def test_overlong_stripe_email_is_dropped_not_stored() -> None:
+    result = map_payment_intent(payment_intent(receipt_email="a" * 900_000 + "@x.org"))
+    assert isinstance(result, NewDonation) and result.donor_email is None

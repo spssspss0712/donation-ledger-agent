@@ -26,6 +26,9 @@ def safe_error_message(exc: BaseException) -> str:
         detail = str(orig) if orig is not None else type(exc).__name__
         first = detail.strip().splitlines()[0] if detail.strip() else ""
         return f"{type(exc).__name__}: {first}"[:300]
+    module = type(exc).__module__.split(".")[0]
+    if module in ("stripe", "gspread", "google", "requests", "urllib3", "httpx"):
+        return type(exc).__name__  # client-library messages can echo keys or response bodies
     return f"{type(exc).__name__}: {str(exc).splitlines()[0] if str(exc) else ''}"[:300]
 
 

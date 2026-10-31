@@ -245,10 +245,21 @@ def test_extra_columns_are_kept_in_raw_payload_and_ignored_for_change_detection(
     assert rows(engine, "SELECT count(*) FROM sync_issues") == [(0,)]
 
 
-def test_short_rows_missing_trailing_cells_are_treated_as_blank_cells(engine: Engine) -> None:
-    res = sync(engine, ListReader([["P1", "2024-03-01", "Pat", "", "7"]]))
-    assert res.counters.rows_inserted == 1
-    assert rows(engine, "SELECT currency, recipient FROM donations") == [("USD", None)]
+def test_truncated_rows_are_quarantined_but_explicitly_blank_trailing_cells_are_fine(
+    engine: Engine,
+) -> None:
+    # "7" could be the cut-off start of "700": never ingest it as a 7 dollar donation.
+    res = sync(
+        engine,
+        ListReader(
+            [["P1", "2024-03-01", "Pat", "", "7"], ["P2", "2024-03-01", "Pat", "", "7", "", ""]]
+        ),
+    )
+    assert res.counters.rows_inserted == 1 and res.counters.rows_quarantined == 1
+    assert rows(engine, "SELECT external_id, currency, recipient FROM donations") == [
+        ("P2", "USD", None)
+    ]
+    assert rows(engine, "SELECT external_id, reason FROM rejected_rows")[0][0] == "P1"
 
 
 def test_nul_characters_quarantine_the_row_instead_of_crashing_the_batch(engine: Engine) -> None:

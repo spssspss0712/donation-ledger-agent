@@ -45,6 +45,12 @@ Format: context, options, choice, why, how easy to change later.
 - `test_csv_with_a_bad_byte_and_an_oversized_cell...` first expected a Latin-1 byte to be stored as U+FFFD. Review round 5 showed that is permanent corruption (and a later UTF-8 re-export would insert the donation a second time), so such rows are now quarantined (`invalid_text: undecodable characters`). The test was updated to the new, stricter behaviour; this is a behaviour decision, not a weakened assertion.
 - `$` is accepted only for dollar/peso-family currencies; headers are matched after stripping invisible characters.
 
+## D7d. Truncated rows
+- A row with fewer cells than the header is quarantined (an interrupted CSV export would otherwise be ingested as a smaller donation that the append-only ledger can never fix). The Google reader pads trailing blanks itself because the API trims them. Entry IDs containing invisible characters *inside* the ID (soft hyphen) are not normalised (marginal).
+
+## D7e. Fail-closed configuration
+- `SHEET_SOURCE` has no default (a forgotten setting must never ingest the bundled sample CSV into a real ledger). `RECONCILE_LOOKBACK_HOURS` is capped at one year. DB sessions are pinned to `timezone=UTC`, and Stripe `created` must be within 2000-01-01..now+2 days, because one absurd timestamp otherwise made `GET /donations` fail for the page containing it. Client-library (Stripe/Google/HTTP) exceptions are stored by type only (their messages can echo key fragments). A stale bad snapshot of a payment already in the ledger is answered as a duplicate and does not reopen its rejection.
+
 ## D8. Stripe mapping
 - ID = `data.object.id` (`pi_...`). Amount = `amount_received` if positive, else `amount` (the money actually captured is the truthful figure; they differ on partial capture). `created` Unix seconds => UTC.
 - A PaymentIntent has no donor name; read from (expanded) `latest_charge.billing_details` / legacy `charges.data[0]`, then `metadata.donor_name|name`, `shipping.name`; e-mail from billing details, `receipt_email`, `metadata.donor_email|email`. **Assumption** (documented in BLOCKERS.md): the website puts donor info in one of these places. No name => anonymous.
