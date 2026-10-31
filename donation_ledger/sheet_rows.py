@@ -113,8 +113,15 @@ def classify_table(
         if len(cells) > mapping["entry_id"] and strip_invisible(cells[mapping["entry_id"]])
     )
     out: list[Classified] = []
+    seen_content: Counter[str] = Counter()
     for number, cells, raw in parsed:
-        out.append(_classify_row(number, cells, raw, mapping, width, id_counts, tz_name, now))
+        base = fingerprint_of(raw)
+        n = seen_content[base]
+        seen_content[base] += 1
+        # Byte-identical rows are separate donations: give each its own identity so ignoring
+        # or fixing one cannot silence the other.
+        fp = base if n == 0 else fingerprint_of({**raw, "_occurrence": n})
+        out.append(_classify_row(number, cells, raw, mapping, width, id_counts, tz_name, now, fp))
     return out
 
 
@@ -127,8 +134,8 @@ def _classify_row(
     id_counts: Counter[str],
     tz_name: str,
     now: datetime | None,
+    fp: str,
 ) -> Classified:
-    fp = fingerprint_of(raw)
 
     def reject(reason: str, entry_id: str | None = None) -> Rejected:
         ext = (

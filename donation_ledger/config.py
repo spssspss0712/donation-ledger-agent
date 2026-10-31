@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 MAX_BATCH_SIZE = 5000
@@ -24,18 +24,18 @@ def normalize_database_url(url: str) -> str:
 
 @dataclass(frozen=True)
 class Settings:
-    database_url: str
-    stripe_webhook_secret: str | None = None
-    stripe_api_key: str | None = None
+    database_url: str = field(repr=False)
+    stripe_webhook_secret: str | None = field(default=None, repr=False)
+    stripe_api_key: str | None = field(default=None, repr=False)
     sheet_timezone: str = "America/Los_Angeles"
     sheet_source: str | None = None  # only the sheet sync needs it; make_reader enforces
     sheet_csv_path: str = "sample_data/sheet.csv"
     google_sheet_id: str | None = None
     google_worksheet: str | None = None
-    google_service_account_json: str | None = None
+    google_service_account_json: str | None = field(default=None, repr=False)
     sync_batch_size: int = 500
     reconcile_lookback_hours: int = 72
-    api_token: str | None = None
+    api_token: str | None = field(default=None, repr=False)
     allow_unauthenticated_api: bool = False
     webhook_tolerance_seconds: int = 300
     max_webhook_body_bytes: int = 1_000_000

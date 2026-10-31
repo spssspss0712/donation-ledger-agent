@@ -23,7 +23,7 @@ Format: context, options, choice, why, how easy to change later.
 ## D6. Quarantine design
 - Identity of a rejected row is a SHA-256 fingerprint of its cell contents (not row number, so inserting rows above doesn't create new entries). Unique `(source, fingerprint)`.
 - Statuses: `open` (re-evaluated every run), `resolved` (a donation now exists for that ID, or the row vanished/was edited after a fully successful run), `ignored` (manual: silences that rejection only; if the same row later becomes valid, e.g. the other copy of a duplicate ID was deleted, it IS ingested - found by review, suppressing it would lose a donation). A resolved row that reappears is reopened.
-- Limitation: byte-identical bad rows collapse into one entry.
+- Byte-identical rows in the same sheet get distinct fingerprints (an occurrence counter is mixed in), so they are separate rejected entries and ignoring one does not silence the other.
 - A row whose `Entry ID` already exists in `donations` is never quarantined for field problems; it is compared and, if different, produces a `changed_after_sync` warning (append-only rule). Duplicate/empty IDs are always quarantined, including the first copy, even when the ID already exists in the ledger (the existing donation stays untouched).
 - Rows with more cells than headers (typically an unquoted comma in an address that shifts every column) are quarantined; fully blank rows are skipped silently.
 - Open rejections not seen in a **fully successful** run become `absent` (not `resolved`: nothing was fixed). They reopen if the same row returns, so a truncated read loses nothing. `resolved` is only set when a donation with that ID now exists.

@@ -19,6 +19,11 @@ from donation_ledger.db import make_engine
 from donation_ledger.models import RejectedRow
 
 
+def _printable(text: str) -> str:
+    """Entry IDs come from sheet cells: neutralise control characters before printing."""
+    return text.encode("unicode_escape").decode("ascii")
+
+
 def list_rejected(engine: Engine, include_closed: bool = False) -> list[RejectedRow]:
     stmt = select(RejectedRow).order_by(RejectedRow.id)
     if not include_closed:
@@ -50,7 +55,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.cmd == "list-rejected":
         for r in list_rejected(engine, include_closed=args.all):
             # No raw row here: it contains donor details. Query the table if you need it.
-            print(f"{r.id}\t{r.status}\t{r.source}\t{r.external_id or '-'}\t{r.reason}")
+            print(f"{r.id}\t{r.status}\t{r.source}\t{_printable(r.external_id or '-')}\t{r.reason}")
         return 0
     if not 1 <= args.id <= 2**63 - 1:
         print("no such rejected row", file=sys.stderr)

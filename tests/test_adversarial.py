@@ -636,3 +636,43 @@ def test_reconcile_does_not_reopen_a_rejection_for_a_payment_already_in_the_ledg
     res = run_reconcile(engine, Source([bad]), timedelta(hours=1))
     assert res.counters.rows_quarantined == 0
     assert rows(engine, "SELECT count(*) FROM rejected_rows") == [(0,)]
+
+
+def test_identical_bad_rows_get_separate_rejection_records_so_ignoring_one_keeps_the_other(
+    engine: Engine,
+) -> None:
+    from donation_ledger.sync import run_sync
+    from tests.test_sync import TZ, ListReader, good
+
+    cash = good("", "20", "Cash Donor")
+    run_sync(engine, ListReader([cash, list(cash)]), TZ)
+    assert rows(engine, "SELECT count(*) FROM rejected_rows") == [(2,)]
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "UPDATE rejected_rows SET status='ignored' WHERE id=(SELECT min(id) FROM rejected_rows)"
+            )
+        )
+    res = run_sync(engine, ListReader([cash, list(cash)]), TZ)
+    assert (res.counters.rows_ignored, res.counters.rows_quarantined) == (1, 1)
+
+
+def test_settings_repr_never_contains_secrets() -> None:
+    cfg = Settings.from_env(
+        {
+            "DATABASE_URL": "postgresql://u:dbpass@h/d",
+            "API_TOKEN": "tok_secret",
+            "STRIPE_WEBHOOK_SECRET": "whsec_real",
+            "STRIPE_API_KEY": "sk_test_abc",
+            "GOOGLE_SERVICE_ACCOUNT_JSON": "{private}",
+        }
+    )
+    text_ = repr(cfg)
+    for secret in ("dbpass", "tok_secret", "whsec_real", "sk_test_abc", "{private}"):
+        assert secret not in text_
+
+
+def test_admin_listing_escapes_control_characters_from_entry_ids() -> None:
+    from donation_ledger.admin import _printable
+
+    assert _printable("a\x1b[31m\nb") == "a\\x1b[31m\\nb"

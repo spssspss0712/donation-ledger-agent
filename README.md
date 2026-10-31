@@ -107,7 +107,6 @@ See `DECISIONS.md` for the full list. The main ones: full comparison every run (
 - A run skipped because another holds the lock is recorded with status `failed` (error text says why); alert on the latest *non-skipped* run.
 - A Stripe payment is dated by the PaymentIntent `created` time, not the time it succeeded.
 - Rejected Stripe payments stay `open` until ignored (no automatic "absent" state), and a webhook and reconcile may each record one entry for the same bad payment.
-- Two byte-identical bad rows (same cells, no distinguishing ID) share one `rejected_rows` entry.
 - The real Google Sheets reader and the real Stripe listing client were never run against the real services.
 - No authentication on the webhook other than the Stripe signature; no rate limiting.
 - Logs/error messages avoid donor data, but `raw_payload`, `rejected_rows.raw_row` and `sync_issues.detail` intentionally contain it: protect database access accordingly.
