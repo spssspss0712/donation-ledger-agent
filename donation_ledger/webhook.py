@@ -52,7 +52,9 @@ def process_event(session_factory: sessionmaker[Session], event: Mapping[str, An
     event_type = event.get("type")
     if event_type != HANDLED_EVENT_TYPE:
         # Refunds, disputes and everything else are out of scope: log, write nothing.
-        log.info("ignored stripe event", extra={"event_id": _s(event.get("id")), "type": _s(event_type)})
+        log.info(
+            "ignored stripe event", extra={"event_id": _s(event.get("id")), "type": _s(event_type)}
+        )
         return Outcome.IGNORED
     data = event.get("data")
     obj = data.get("object") if isinstance(data, Mapping) else None
@@ -80,7 +82,11 @@ def process_event(session_factory: sessionmaker[Session], event: Mapping[str, An
     outcome = Outcome.CREATED if inserted else Outcome.DUPLICATE
     log.info(
         "stripe payment processed",
-        extra={"event_id": _s(event.get("id")), "external_id": mapped.external_id, "outcome": outcome.value},
+        extra={
+            "event_id": _s(event.get("id")),
+            "external_id": mapped.external_id,
+            "outcome": outcome.value,
+        },
     )
     return outcome
 

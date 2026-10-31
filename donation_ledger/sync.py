@@ -12,23 +12,31 @@ import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, TypeVar
+from typing import Any
 
-from sqlalchemy import Engine, select, text, update
+from sqlalchemy import Engine, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from donation_ledger.config import ConfigError, Settings
 from donation_ledger.db import make_engine
-from donation_ledger.ledger import NewDonation, Rejection, fingerprint_of, insert_donations, record_rejection
+from donation_ledger.ledger import (
+    NewDonation,
+    Rejection,
+    fingerprint_of,
+    insert_donations,
+    record_rejection,
+)
 from donation_ledger.logging_setup import configure_logging
 from donation_ledger.models import SOURCE_SHEET, Donation, RejectedRow, SyncIssue, SyncRun
 from donation_ledger.runs import (
     Counters,
     LockNotAcquiredError,
+    add_counters,
     advisory_lock,
     assert_lock_still_held,
     fail_stale_runs,
+    finish_run,
     safe_error_message,
     start_run,
 )
@@ -38,7 +46,6 @@ from donation_ledger.sources import SheetReader, SheetReadError, make_reader
 log = logging.getLogger(__name__)
 
 ISSUE_CHANGED_AFTER_SYNC = "changed_after_sync"
-T = TypeVar("T")
 
 EXIT_OK = 0
 EXIT_FAILED = 1
@@ -53,7 +60,7 @@ class SyncResult:
     error: str | None = None
 
 
-def chunks(items: Sequence[T], size: int) -> list[Sequence[T]]:
+def chunks[T](items: Sequence[T], size: int) -> list[Sequence[T]]:
     return [items[i : i + size] for i in range(0, len(items), size)]
 
 
@@ -112,13 +119,13 @@ def _run_locked(
             assert_lock_still_held(lock_conn)
             with Session(engine) as session, session.begin():
                 batch_counters = _process_batch(session, batch, run_id, ignored)
-                _add_counters(session, run_id, batch_counters)
+                add_counters(session, run_id, batch_counters)
             counters.add(batch_counters)
             committed_batches += 1
         assert_lock_still_held(lock_conn)
         with Session(engine) as session, session.begin():
             _resolve_absent_rejections(session, run_id)
-            _finish(session, run_id, "succeeded", None)
+            finish_run(session, run_id, "succeeded", None)
     except (HeaderError, SheetReadError) as exc:
         return _fail(engine, run_id, counters, "failed", f"{type(exc).__name__}: {exc}")
     except Exception as exc:  # noqa: BLE001 - any failure must end up in sync_runs
@@ -132,35 +139,11 @@ def _fail(engine: Engine, run_id: int, counters: Counters, status: str, message:
     log.error("sync failed", extra={"run_id": run_id, "status": status, "error": message})
     try:
         with Session(engine) as session, session.begin():
-            _finish(session, run_id, status, message)
+            finish_run(session, run_id, status, message)
     except Exception as exc:  # noqa: BLE001
         # Leaves the row 'running'; the next lock holder marks it failed.
         log.error("could not record failure", extra={"error": safe_error_message(exc)})
     return SyncResult(run_id, status, counters, message)
-
-
-def _finish(session: Session, run_id: int, status: str, message: str | None) -> None:
-    session.execute(
-        update(SyncRun)
-        .where(SyncRun.id == run_id)
-        .values(status=status, error_message=message, finished_at=text("now()"))
-    )
-
-
-def _add_counters(session: Session, run_id: int, c: Counters) -> None:
-    # Same transaction as the batch: the counters always match committed data.
-    session.execute(
-        update(SyncRun)
-        .where(SyncRun.id == run_id)
-        .values(
-            rows_read=SyncRun.rows_read + c.rows_read,
-            rows_inserted=SyncRun.rows_inserted + c.rows_inserted,
-            rows_duplicate_skipped=SyncRun.rows_duplicate_skipped + c.rows_duplicate_skipped,
-            rows_quarantined=SyncRun.rows_quarantined + c.rows_quarantined,
-            rows_ignored=SyncRun.rows_ignored + c.rows_ignored,
-            issues_recorded=SyncRun.issues_recorded + c.issues_recorded,
-        )
-    )
 
 
 def _ignored_fingerprints(session: Session) -> set[str]:
@@ -185,7 +168,9 @@ def _process_batch(
             c.rows_ignored += 1
         elif outcome.entry_id in existing:
             c.rows_duplicate_skipped += 1
-            c.issues_recorded += _warn_if_changed(session, outcome, existing[outcome.entry_id], run_id)
+            c.issues_recorded += _warn_if_changed(
+                session, outcome, existing[outcome.entry_id], run_id
+            )
         elif isinstance(outcome.result, NewDonation):
             to_insert.append(outcome.result)
         else:
@@ -223,8 +208,11 @@ def _warn_if_changed(session: Session, row: Candidate, stored: dict[str, Any], r
     changed = sorted(k for k, v in row.fields.items() if old.get(k) != v)
     if not changed:
         return 0
-    detail = {"changed_fields": changed, "stored": {k: old.get(k) for k in changed},
-              "current": {k: row.fields[k] for k in changed}}
+    detail = {
+        "changed_fields": changed,
+        "stored": {k: old.get(k) for k in changed},
+        "current": {k: row.fields[k] for k in changed},
+    }
     stmt = (
         pg_insert(SyncIssue)
         .values(

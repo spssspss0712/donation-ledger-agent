@@ -7,7 +7,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 
-from sqlalchemy import Connection, Engine, text
+from sqlalchemy import Connection, Engine, text, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -102,3 +102,27 @@ def start_run(session: Session, source: str) -> int:
     session.add(run)
     session.flush()
     return run.id
+
+
+def finish_run(session: Session, run_id: int, status: str, message: str | None) -> None:
+    session.execute(
+        update(SyncRun)
+        .where(SyncRun.id == run_id)
+        .values(status=status, error_message=message, finished_at=text("now()"))
+    )
+
+
+def add_counters(session: Session, run_id: int, c: Counters) -> None:
+    # Same transaction as the batch: the counters always match committed data.
+    session.execute(
+        update(SyncRun)
+        .where(SyncRun.id == run_id)
+        .values(
+            rows_read=SyncRun.rows_read + c.rows_read,
+            rows_inserted=SyncRun.rows_inserted + c.rows_inserted,
+            rows_duplicate_skipped=SyncRun.rows_duplicate_skipped + c.rows_duplicate_skipped,
+            rows_quarantined=SyncRun.rows_quarantined + c.rows_quarantined,
+            rows_ignored=SyncRun.rows_ignored + c.rows_ignored,
+            issues_recorded=SyncRun.issues_recorded + c.issues_recorded,
+        )
+    )

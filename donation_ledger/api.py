@@ -145,7 +145,9 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
         if source is not None:
             stmt = stmt.where(SyncRun.source == source)
         with get_session() as session:
-            return [SyncRunOut.model_validate(r, from_attributes=True) for r in session.scalars(stmt)]
+            return [
+                SyncRunOut.model_validate(r, from_attributes=True) for r in session.scalars(stmt)
+            ]
 
     return app
 

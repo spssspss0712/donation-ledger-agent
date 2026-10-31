@@ -41,8 +41,10 @@ def test_validly_signed_payment_event_creates_exactly_one_donation(
     assert resp.status_code == 200
     with engine.connect() as conn:
         row = conn.execute(
-            text("SELECT source, external_id, amount_minor, currency, donor_name, "
-                 "is_anonymous, donor_email, donated_at FROM donations")
+            text(
+                "SELECT source, external_id, amount_minor, currency, donor_name, "
+                "is_anonymous, donor_email, donated_at FROM donations"
+            )
         ).one()
     assert row.source == "stripe"
     assert row.external_id == "pi_FAKE0001"
@@ -78,7 +80,9 @@ def test_wrong_signature_returns_400_and_writes_nothing(client: TestClient, engi
     assert count(engine) == 0 and count(engine, "rejected_rows") == 0
 
 
-def test_missing_signature_returns_400_and_writes_nothing(client: TestClient, engine: Engine) -> None:
+def test_missing_signature_returns_400_and_writes_nothing(
+    client: TestClient, engine: Engine
+) -> None:
     assert post(client, encode(event()), None).status_code == 400
     assert count(engine) == 0
 
@@ -124,8 +128,13 @@ def test_signed_non_json_body_returns_400(client: TestClient) -> None:
 def test_unrecognised_event_type_returns_2xx_and_writes_to_no_table(
     client: TestClient, engine: Engine
 ) -> None:
-    for type_ in ("charge.refunded", "charge.dispute.created", "payment_intent.created",
-                  "payment_intent.payment_failed", "totally.unknown"):
+    for type_ in (
+        "charge.refunded",
+        "charge.dispute.created",
+        "payment_intent.created",
+        "payment_intent.payment_failed",
+        "totally.unknown",
+    ):
         body = encode(event(type_=type_))
         assert post(client, body, sign(body, FAKE_WEBHOOK_SECRET)).status_code == 200
     for table in ("donations", "rejected_rows", "sync_issues", "sync_runs"):
@@ -180,7 +189,9 @@ def test_name_and_email_are_read_from_charge_billing_details(
     body = encode(event(obj))
     assert post(client, body, sign(body, FAKE_WEBHOOK_SECRET)).status_code == 200
     with engine.connect() as conn:
-        row = conn.execute(text("SELECT donor_name, donor_email, is_anonymous FROM donations")).one()
+        row = conn.execute(
+            text("SELECT donor_name, donor_email, is_anonymous FROM donations")
+        ).one()
     assert (row.donor_name, row.donor_email, row.is_anonymous) == ("Grace Hopper", "g@x.org", False)
 
 

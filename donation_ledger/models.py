@@ -57,9 +57,7 @@ class Donation(Base):
     donated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     is_anonymous: Mapped[bool] = mapped_column(Boolean)
     raw_payload: Mapped[dict[str, Any]] = mapped_column(JSONB)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class SyncRun(Base):
@@ -72,9 +70,7 @@ class SyncRun(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     source: Mapped[str] = mapped_column(String(32))
-    started_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     status: Mapped[str] = mapped_column(String(16), server_default="running")
     rows_read: Mapped[int] = mapped_column(Integer, server_default="0")
@@ -133,8 +129,4 @@ class SyncIssue(Base):
     sync_run_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("sync_runs.id", ondelete="SET NULL")
     )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
-
-
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

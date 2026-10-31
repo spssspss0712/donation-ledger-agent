@@ -72,14 +72,19 @@ def test_sample_csv_inserts_good_rows_and_quarantines_bad_ones_with_reasons(engi
         ("S-014", "malformed_row"),
     ]
     assert (res.counters.rows_read, res.counters.rows_inserted, res.counters.rows_quarantined) == (
-        15, 6, 9)
+        15,
+        6,
+        9,
+    )
     run = rows(engine, "SELECT status, rows_read, rows_inserted, rows_quarantined FROM sync_runs")
     assert run == [("succeeded", 15, 6, 9)]
 
 
 def test_the_word_anonymous_is_never_stored(engine: Engine) -> None:
     sync(engine, CsvSheetReader(SAMPLE))
-    assert rows(engine, "SELECT count(*) FROM donations WHERE donor_name ILIKE '%anonymous%'") == [(0,)]
+    assert rows(engine, "SELECT count(*) FROM donations WHERE donor_name ILIKE '%anonymous%'") == [
+        (0,)
+    ]
 
 
 def test_rerunning_the_same_sheet_changes_nothing_and_reports_duplicates(engine: Engine) -> None:
@@ -114,7 +119,9 @@ def test_quarantined_row_is_retried_and_ingested_once_it_is_fixed(engine: Engine
     assert rows(engine, "SELECT status FROM rejected_rows") == [("resolved",)]
 
 
-def test_a_quarantined_row_that_was_removed_from_the_sheet_is_marked_resolved(engine: Engine) -> None:
+def test_a_quarantined_row_that_was_removed_from_the_sheet_is_marked_resolved(
+    engine: Engine,
+) -> None:
     reader = ListReader([good("C1", "bad")])
     sync(engine, reader)
     reader.table = SheetTable(HEADER, [])
@@ -206,11 +213,21 @@ def test_renamed_or_missing_column_fails_the_run_and_writes_no_donations(engine:
 
 
 def test_header_matching_ignores_case_spacing_bom_and_column_order(engine: Engine) -> None:
-    header = ["﻿ENTRY  id", " date", "Recipient", "amount ", "Donor Address", "currency", "donor name"]
+    header = [
+        "﻿ENTRY  id",
+        " date",
+        "Recipient",
+        "amount ",
+        "Donor Address",
+        "currency",
+        "donor name",
+    ]
     row = ["M1", "2024-03-01", "Fund", "5", "1 Road", "", "Zed"]
     res = sync(engine, ListReader([row], header=header))
     assert res.status == "succeeded"
-    assert rows(engine, "SELECT donor_name, recipient, currency FROM donations") == [("Zed", "Fund", "USD")]
+    assert rows(engine, "SELECT donor_name, recipient, currency FROM donations") == [
+        ("Zed", "Fund", "USD")
+    ]
 
 
 def test_duplicate_header_columns_fail_the_run(engine: Engine) -> None:
@@ -218,7 +235,9 @@ def test_duplicate_header_columns_fail_the_run(engine: Engine) -> None:
     assert res.status == "failed"
 
 
-def test_extra_columns_are_kept_in_raw_payload_and_ignored_for_change_detection(engine: Engine) -> None:
+def test_extra_columns_are_kept_in_raw_payload_and_ignored_for_change_detection(
+    engine: Engine,
+) -> None:
     header = [*HEADER, "Notes"]
     sync(engine, ListReader([[*good("N1"), "first note"]], header=header))
     sync(engine, ListReader([[*good("N1"), "edited note"]], header=header))
@@ -241,8 +260,16 @@ def test_nul_characters_quarantine_the_row_instead_of_crashing_the_batch(engine:
 
 def test_very_long_values_are_quarantined_or_stored_without_error(engine: Engine) -> None:
     long_name = "x" * 100_000
-    res = sync(engine, ListReader([good("R1", name=long_name), good("R2"),
-                                   ["R3" * 500, "2024-03-01", "a", "b", "5", "USD", "c"]]))
+    res = sync(
+        engine,
+        ListReader(
+            [
+                good("R1", name=long_name),
+                good("R2"),
+                ["R3" * 500, "2024-03-01", "a", "b", "5", "USD", "c"],
+            ]
+        ),
+    )
     assert res.status == "succeeded"
     assert rows(engine, "SELECT external_id FROM donations") == [("R2",)]
     assert rows(engine, "SELECT count(*) FROM rejected_rows") == [(2,)]
@@ -273,7 +300,9 @@ def test_unreadable_sheet_marks_the_run_failed(engine: Engine, tmp_path: Path) -
         CsvSheetReader(tmp_path / "missing.csv").read()
 
 
-def test_csv_with_utf8_bom_and_crlf_and_quoted_newlines_is_read(engine: Engine, tmp_path: Path) -> None:
+def test_csv_with_utf8_bom_and_crlf_and_quoted_newlines_is_read(
+    engine: Engine, tmp_path: Path
+) -> None:
     p = tmp_path / "s.csv"
     p.write_bytes(
         b"\xef\xbb\xbfEntry ID,Date,Donor Name,Donor Address,Amount,Currency,Recipient\r\n"

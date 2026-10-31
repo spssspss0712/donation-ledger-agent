@@ -102,7 +102,7 @@ def test_database_connection_dropped_midway_leaves_consistent_data_and_rerun_hea
     finally:
         event.remove(engine, "before_cursor_execute", kill_own_backend)
     assert first.status in ("partial", "failed")
-    committed = rows(engine, "SELECT count(*) FROM donations")[0][0]
+    committed = int(str(rows(engine, "SELECT count(*) FROM donations")[0][0]))
     assert committed % 10 == 0 and committed < n  # only whole batches survive
     assert sync(engine, ListReader(make_rows(n))).status == "succeeded"
     assert_complete_and_unduplicated(engine, n)
@@ -132,7 +132,7 @@ def test_lock_connection_lost_aborts_the_run_instead_of_continuing_unprotected(
     finally:
         event.remove(engine, "before_cursor_execute", kill_lock_holder)
     assert res.status in ("partial", "failed")
-    assert rows(engine, "SELECT count(*) FROM donations")[0][0] < n
+    assert int(str(rows(engine, "SELECT count(*) FROM donations")[0][0])) < n
     assert sync(engine, ListReader(make_rows(n))).status == "succeeded"
     assert_complete_and_unduplicated(engine, n)
 
@@ -188,10 +188,14 @@ def test_lock_is_released_after_a_failed_run_so_the_next_run_can_start(engine: E
     bad = ListReader([], header=["nope"])
     assert sync(engine, bad).status == "failed"
     assert sync(engine, ListReader(make_rows(3))).status == "succeeded"
-    assert rows(engine, "SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND granted") == [(0,)]
+    assert rows(engine, "SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND granted") == [
+        (0,)
+    ]
 
 
-def test_stale_running_row_from_a_crashed_run_is_marked_failed_by_the_next_run(engine: Engine) -> None:
+def test_stale_running_row_from_a_crashed_run_is_marked_failed_by_the_next_run(
+    engine: Engine,
+) -> None:
     with engine.begin() as conn:
         conn.execute(text("INSERT INTO sync_runs (source, status) VALUES ('sheet', 'running')"))
     sync(engine, ListReader(make_rows(2)))
@@ -238,7 +242,9 @@ def test_process_killed_with_sigkill_midway_then_rerun_has_no_loss_or_duplicates
     assert proc.returncode == 137, proc.stderr.decode()[-500:]
     crashed = rows(engine, "SELECT status FROM sync_runs")
     assert crashed == [("running",)]
-    assert rows(engine, "SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND granted") == [(0,)]
+    assert rows(engine, "SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND granted") == [
+        (0,)
+    ]
     result = sync(engine, ListReader(make_rows(n)))
     assert result.status == "succeeded"
     assert_complete_and_unduplicated(engine, n)
@@ -252,9 +258,13 @@ def test_cli_exit_codes_follow_the_documented_contract(
     data = tmp_path / "sheet.csv"
     data.write_text(",".join(HEADER) + "\n" + ",".join(good("CLI1")) + "\n", encoding="utf-8")
     env = {**os.environ, "DATABASE_URL": database_url_for_tests(), "SHEET_CSV_PATH": str(data)}
-    ok = subprocess.run([sys.executable, "-m", "donation_ledger.sync"], env=env, capture_output=True)  # noqa: S603
+    ok = subprocess.run(
+        [sys.executable, "-m", "donation_ledger.sync"], env=env, capture_output=True
+    )  # noqa: S603
     assert ok.returncode == 0, ok.stderr.decode()
     data.write_text("wrong,header\n", encoding="utf-8")
-    bad = subprocess.run([sys.executable, "-m", "donation_ledger.sync"], env=env, capture_output=True)  # noqa: S603
+    bad = subprocess.run(
+        [sys.executable, "-m", "donation_ledger.sync"], env=env, capture_output=True
+    )  # noqa: S603
     assert bad.returncode == 1
     assert b'"level"' in bad.stderr  # structured JSON logs

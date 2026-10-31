@@ -40,7 +40,9 @@ def payment_intent(
 
 
 def event(
-    obj: dict[str, Any] | None = None, event_id: str = "evt_FAKE0001", type_: str = "payment_intent.succeeded"
+    obj: dict[str, Any] | None = None,
+    event_id: str = "evt_FAKE0001",
+    type_: str = "payment_intent.succeeded",
 ) -> dict[str, Any]:
     return {
         "id": event_id,

@@ -99,7 +99,7 @@ def record_rejection(session: Session, rej: Rejection, run_id: int | None) -> st
 
     resolved -> reopened (the problem is back); ignored stays ignored (a human decided).
     """
-    stmt = pg_insert(RejectedRow).values(
+    base = pg_insert(RejectedRow).values(
         source=rej.source,
         external_id=rej.external_id,
         raw_row=rej.raw_row,
@@ -109,12 +109,12 @@ def record_rejection(session: Session, rej: Rejection, run_id: int | None) -> st
         first_seen_run_id=run_id,
         sync_run_id=run_id,
     )
-    stmt = stmt.on_conflict_do_update(
+    stmt = base.on_conflict_do_update(
         constraint="uq_rejected_rows_source_fingerprint",
         set_={
-            "reason": stmt.excluded.reason,
-            "raw_row": stmt.excluded.raw_row,
-            "external_id": stmt.excluded.external_id,
+            "reason": base.excluded.reason,
+            "raw_row": base.excluded.raw_row,
+            "external_id": base.excluded.external_id,
             "sync_run_id": run_id,
             "attempts": RejectedRow.attempts + 1,
             "last_seen_at": func.now(),

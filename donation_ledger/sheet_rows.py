@@ -84,7 +84,9 @@ def _safe_cell(value: str) -> str:
     return value.replace("\x00", "\\x00").encode("utf-8", errors="replace").decode("utf-8")
 
 
-def classify_table(table: SheetTable, tz_name: str, now: datetime | None = None) -> list[Classified]:
+def classify_table(
+    table: SheetTable, tz_name: str, now: datetime | None = None
+) -> list[Classified]:
     mapping = map_header(table.header)
     width = len(table.header)
     header_names = [_safe_cell(h.strip()) or f"column_{i + 1}" for i, h in enumerate(table.header)]
@@ -119,8 +121,12 @@ def _classify_row(
     fp = fingerprint_of(raw)
 
     def reject(reason: str, entry_id: str | None = None) -> Rejected:
-        ext = entry_id if entry_id and len(entry_id) <= MAX_ID_LEN and not has_nul(entry_id) else None
-        return Rejected(number, Rejection(SOURCE_SHEET, ext, {**raw, "_row_number": number}, reason, fp))
+        ext = (
+            entry_id if entry_id and len(entry_id) <= MAX_ID_LEN and not has_nul(entry_id) else None
+        )
+        return Rejected(
+            number, Rejection(SOURCE_SHEET, ext, {**raw, "_row_number": number}, reason, fp)
+        )
 
     def cell(field: str) -> str:
         i = mapping[field]
@@ -136,12 +142,19 @@ def _classify_row(
     if len(entry_id) > MAX_ID_LEN:
         return reject("invalid_entry_id: too long")
     if id_counts[entry_id] > 1:
-        return reject(f"duplicate_entry_id: appears {id_counts[entry_id]} times in the sheet", entry_id)
+        return reject(
+            f"duplicate_entry_id: appears {id_counts[entry_id]} times in the sheet", entry_id
+        )
     fields = {f: _safe_cell(cell(f).strip()) for f in REQUIRED_COLUMNS}
     result = _build_donation(entry_id, fields, raw, number, tz_name, now)
     if isinstance(result, str):
-        return Candidate(number, entry_id, fields, fp, Rejection(
-            SOURCE_SHEET, entry_id, {**raw, "_row_number": number}, result, fp))
+        return Candidate(
+            number,
+            entry_id,
+            fields,
+            fp,
+            Rejection(SOURCE_SHEET, entry_id, {**raw, "_row_number": number}, result, fp),
+        )
     return Candidate(number, entry_id, fields, fp, result)
 
 
