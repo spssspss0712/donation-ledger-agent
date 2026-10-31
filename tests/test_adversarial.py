@@ -166,7 +166,7 @@ def test_the_word_anonymous_appears_nowhere_in_stored_sheet_data(engine: Engine)
         "(SELECT string_agg(raw_row::text, '') FROM rejected_rows) || "
         "coalesce((SELECT string_agg(detail::text, '') FROM sync_issues), '')",
     )[0][0]
-    assert "nonymous" not in str(dump).lower().replace("anonymous_", "")
+    assert "anonymous" not in str(dump).lower()
     # Re-casing "Anonymous" is not an edit worth a warning.
     assert rows(engine, "SELECT count(*) FROM sync_issues") == [(0,)]
 

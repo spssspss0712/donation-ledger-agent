@@ -26,7 +26,8 @@ Format: context, options, choice, why, how easy to change later.
 - Limitation: byte-identical bad rows collapse into one entry.
 - A row whose `Entry ID` already exists in `donations` is never quarantined for field problems; it is compared and, if different, produces a `changed_after_sync` warning (append-only rule). Duplicate/empty IDs are always quarantined, including the first copy, even when the ID already exists in the ledger (the existing donation stays untouched).
 - Rows with more cells than headers (typically an unquoted comma in an address that shifts every column) are quarantined; fully blank rows are skipped silently.
-- Open rejections not seen in a **fully successful** run are marked resolved. A transient empty read would only resolve them temporarily (they reopen next run); no donation is affected.
+- Open rejections not seen in a **fully successful** run become `absent` (not `resolved`: nothing was fixed). They reopen if the same row returns, so a truncated read loses nothing. `resolved` is only set when a donation with that ID now exists.
+- "Anonymous" is scrubbed to an empty cell inside stored sheet `raw_payload`/`raw_row` too (found by review), and change detection compares the scrubbed form, so re-casing it is not a warning.
 
 ## D7. Sheet validation specifics
 - Header names matched case-insensitively with whitespace collapsed and BOM removed; order irrelevant; **all seven columns required** (a renamed `Currency` column must not silently default everything to USD). Missing/duplicate column => the run fails and writes nothing.
@@ -49,6 +50,9 @@ Format: context, options, choice, why, how easy to change later.
 
 ## D10. Errors and logs
 - `sync_runs.error_message` and logs contain exception type plus the first line of the driver message only. SQLAlchemy's default messages embed bound parameters (donor data), so they are never stored or logged. The JSON formatter drops tracebacks (logs `exc_type`). Log calls pass IDs and counts only.
+
+## D10b. Timeouts
+- DB: connect 10 s, statement 120 s, lock 30 s. Google client 60 s. Without them a stalled network could hold the sync advisory lock forever and block every later run (found by review).
 
 ## D11. Dependencies (all pinned in `requirements*.txt`)
 fastapi + uvicorn (spec), SQLAlchemy 2 + alembic + psycopg 3 (spec; psycopg binary wheel avoids system libpq), pydantic (response models; already a FastAPI dependency), stripe (spec: signature verification and API client), gspread (spec). Dev: pytest, httpx (needed by FastAPI's TestClient), ruff, mypy, pip-audit. No pydantic-settings: settings are a 40-line dataclass over `os.environ`. `pip-audit` reported no known vulnerabilities for the runtime pins when run (see report).

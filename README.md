@@ -29,7 +29,7 @@ Code layout: pure logic (`parsing.py`, `stripe_mapping.py`, `sheet_rows.py`) is 
 |-------|---------|
 | `donations` | The ledger. One row per real donation. `UNIQUE(source, external_id)` is the deduplication guarantee. `source` is `stripe` or `sheet`; `external_id` is the `pi_...` ID or the sheet `Entry ID`. `amount_minor` is an integer in the smallest currency unit (cents); `currency` is uppercase ISO 4217; `donated_at` is UTC. `donor_name` is `NULL` and `is_anonymous` is true for anonymous donors (a CHECK keeps them consistent); the word "Anonymous" exists only in the API. `raw_payload` keeps the original Stripe object or sheet row. |
 | `sync_runs` | One row per sync or reconcile run: source (`sheet`, `stripe_reconcile`), start/end, status (`running`, `succeeded`, `failed`, `partial`), rows read / inserted / duplicate-skipped / quarantined / ignored, warnings recorded, and a PII-free error message. |
-| `rejected_rows` | Quarantine. Source, external ID (if any), the raw row, the reason, the run that last saw it, and a status: `open` (retried every run), `resolved` (fixed or gone), `ignored` (a human said stop). Identity is a content fingerprint, not a row position. |
+| `rejected_rows` | Quarantine. Source, external ID (if any), the raw row, the reason, the run that last saw it, and a status: `open` (retried every run), `resolved` (a donation now exists for it), `absent` (no longer in the sheet; reopens if it returns), `ignored` (a human said stop). Identity is a content fingerprint, not a row position. |
 | `sync_issues` | Warnings. Currently only `changed_after_sync`: a row already ingested was later edited in the sheet. The donation is never modified. |
 
 ## Correctness and recovery
@@ -96,6 +96,10 @@ See `DECISIONS.md` for the full list. The main ones: full comparison every run (
 - `Stripe` donor name/e-mail are only available when the event carries them (billing details on an expanded charge, `receipt_email`, or `metadata.donor_name`/`donor_email`). A bare PaymentIntent event has no name, so those donations are stored as anonymous.
 - Reconciliation looks back a fixed window by creation time; a payment created before the window that succeeds later is missed if its webhook is also lost.
 - If someone edits a synced sheet row, only a warning is stored; nobody is notified automatically. Check `sync_issues`.
+- A named Stripe donor can be stored as anonymous: real webhook events carry `latest_charge` as an ID string, and the billing name lives on the charge. Only reconciliation (which expands the charge) or `metadata.donor_name` supplies it, and the append-only ledger never back-fills. If the webhook wins the race the row stays anonymous. Put the donor name in PaymentIntent metadata on the website to avoid this.
+- Reconciliation cannot see payments created before its lookback window that succeed later.
+- Amounts like `.5` or `10.` are quarantined (only `1000`, `1,000.50`, `$1,000.50` styles are accepted).
+- Stripe `raw_payload` is stored verbatim, so a donor literally named "Anonymous" in Stripe metadata appears there (the `donor_name` column is still NULL).
 - Two byte-identical bad rows (same cells, no distinguishing ID) share one `rejected_rows` entry.
 - The real Google Sheets reader and the real Stripe listing client were never run against the real services.
 - No authentication on the webhook other than the Stripe signature; no rate limiting.
