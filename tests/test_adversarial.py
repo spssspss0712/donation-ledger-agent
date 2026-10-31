@@ -264,7 +264,7 @@ def test_fuzzed_sheet_cells_and_payment_intents_never_raise_out_of_the_classifie
     from donation_ledger.sheet_rows import classify_table
     from donation_ledger.sources import SheetTable
 
-    rng = random.Random(1234)  # fixed seed: reproducible
+    rng = random.Random(1234)  # noqa: S311 - fixed seed, not security related
     alphabet = list("0123456789-/:.,$()+eE TZ\u0000\ud800٠１é‮ ") + ["9999", "00", "NaN"]
 
     def junk() -> str:
