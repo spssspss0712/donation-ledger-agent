@@ -60,7 +60,7 @@ Classified = Candidate | Rejected
 
 
 def _norm_header(text: str) -> str:
-    return " ".join(text.replace("﻿", "").split()).casefold()
+    return " ".join(strip_invisible(text).split()).casefold()
 
 
 def map_header(header: Sequence[str]) -> dict[str, int]:
@@ -145,6 +145,10 @@ def _classify_row(
     entry_id = _safe_cell(strip_invisible(cell("entry_id")))
     if len(cells) > width and any(strip_invisible(c) for c in cells[width:]):
         return reject("malformed_row: more cells than header columns", entry_id)
+    if any("\ufffd" in c for c in cells):
+        # Produced by the CSV reader for undecodable bytes: storing it would be permanent
+        # corruption, and a later UTF-8 re-export would then insert the donation twice.
+        return reject("invalid_text: undecodable characters (is the file UTF-8?)", entry_id)
     if any(has_nul(c) for c in cells):
         return reject("invalid_text: contains NUL character", entry_id)
     if not entry_id:

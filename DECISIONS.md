@@ -41,6 +41,10 @@ Format: context, options, choice, why, how easy to change later.
 - Decoded with `errors="replace"` and a 10 MB field limit so one bad byte or giant cell cannot abort the whole file (the cell is stored with U+FFFD or quarantined by length checks). **Not handled:** an unterminated quote swallows the following lines into one cell (inherent to CSV); that row is then quarantined/odd and rows after it are missed until fixed. Google values have no such problem.
 - Zero-width/format-only names count as anonymous. ASCII-only currency codes (so `ınr` is not silently "corrected" to INR).
 
+## D7c. Test expectation changed on purpose
+- `test_csv_with_a_bad_byte_and_an_oversized_cell...` first expected a Latin-1 byte to be stored as U+FFFD. Review round 5 showed that is permanent corruption (and a later UTF-8 re-export would insert the donation a second time), so such rows are now quarantined (`invalid_text: undecodable characters`). The test was updated to the new, stricter behaviour; this is a behaviour decision, not a weakened assertion.
+- `$` is accepted only for dollar/peso-family currencies; headers are matched after stripping invisible characters.
+
 ## D8. Stripe mapping
 - ID = `data.object.id` (`pi_...`). Amount = `amount_received` if positive, else `amount` (the money actually captured is the truthful figure; they differ on partial capture). `created` Unix seconds => UTC.
 - A PaymentIntent has no donor name; read from (expanded) `latest_charge.billing_details` / legacy `charges.data[0]`, then `metadata.donor_name|name`, `shipping.name`; e-mail from billing details, `receipt_email`, `metadata.donor_email|email`. **Assumption** (documented in BLOCKERS.md): the website puts donor info in one of these places. No name => anonymous.

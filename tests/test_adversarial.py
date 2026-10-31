@@ -329,8 +329,9 @@ def test_csv_with_a_bad_byte_and_an_oversized_cell_still_syncs_the_other_rows(
     )
     res = run_sync(engine, CsvSheetReader(p), TZ)
     assert res.status == "succeeded"
-    assert rows(engine, "SELECT external_id FROM donations ORDER BY 1") == [("C1",), ("C3",)]
-    assert rows(engine, "SELECT external_id FROM rejected_rows") == [("C2",)]
+    # C1 has an undecodable byte: quarantined (not stored with U+FFFD); C2 is oversized.
+    assert rows(engine, "SELECT external_id FROM donations ORDER BY 1") == [("C3",)]
+    assert rows(engine, "SELECT external_id FROM rejected_rows ORDER BY 1") == [("C1",), ("C2",)]
 
 
 def test_hostile_values_that_overflow_or_use_surrogates_are_quarantined_not_fatal() -> None:
@@ -455,3 +456,36 @@ def test_alembic_works_from_any_working_directory(tmp_path: Any) -> None:
         capture_output=True,
     )
     assert proc.returncode == 0, proc.stderr.decode()[-400:]
+
+
+def test_non_utf8_bytes_are_quarantined_not_stored_as_replacement_characters(
+    engine: Engine, tmp_path: Any
+) -> None:
+    from donation_ledger.sources import CsvSheetReader
+    from donation_ledger.sync import run_sync
+    from tests.test_sync import HEADER, TZ
+
+    p = tmp_path / "s.csv"
+    p.write_bytes((",".join(HEADER) + "\n").encode() + b"\xc9-1,2024-01-15,Jos\xe9,,50,,r\n")
+    run_sync(engine, CsvSheetReader(p), TZ)
+    assert rows(engine, "SELECT count(*) FROM donations") == [(0,)]
+    p.write_bytes((",".join(HEADER) + "\n").encode() + "É-1,2024-01-15,José,,50,,r\n".encode())
+    run_sync(engine, CsvSheetReader(p), TZ)  # fixed export
+    assert rows(engine, "SELECT external_id FROM donations") == [("É-1",)]
+
+
+def test_invisible_characters_in_header_names_do_not_fail_the_run(engine: Engine) -> None:
+    from donation_ledger.sync import run_sync
+    from tests.test_sync import HEADER, TZ, ListReader, good
+
+    header = [HEADER[0] + "​", *HEADER[1:]]
+    assert run_sync(engine, ListReader([good("ZH1")], header=header), TZ).status == "succeeded"
+
+
+def test_dollar_sign_contradicting_the_currency_is_quarantined(engine: Engine) -> None:
+    from donation_ledger.parsing import RowError, minor_units_from_decimal_string
+
+    assert minor_units_from_decimal_string("$5", "CAD") == 500
+    for cur in ("GBP", "JPY", "EUR"):
+        with pytest.raises(RowError):
+            minor_units_from_decimal_string("$5", cur)

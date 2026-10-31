@@ -200,6 +200,38 @@ ISO_4217 = frozenset(
 _AMOUNT_RE = re.compile(r"^\$?\s*(?P<int>\d{1,3}(?:,\d{3})+|\d+)(?:\.(?P<frac>\d+))?$", re.ASCII)
 
 # Earliest plausible donation and how far in the future we tolerate (clock/timezone slack).
+# "$" is only accepted for currencies that are dollars/pesos written with that sign.
+DOLLAR_FAMILY = frozenset(
+    [
+        "USD",
+        "CAD",
+        "AUD",
+        "NZD",
+        "HKD",
+        "SGD",
+        "TWD",
+        "MXN",
+        "ARS",
+        "CLP",
+        "COP",
+        "BSD",
+        "BBD",
+        "BMD",
+        "BZD",
+        "BND",
+        "FJD",
+        "GYD",
+        "JMD",
+        "KYD",
+        "LRD",
+        "NAD",
+        "SBD",
+        "SRD",
+        "TTD",
+        "XCD",
+    ]
+)
+
 MIN_DATE = datetime(2000, 1, 1, tzinfo=UTC)
 FUTURE_SLACK = timedelta(days=2)
 
@@ -249,6 +281,8 @@ def minor_units_from_decimal_string(text: str, currency: str) -> int:
     match = _AMOUNT_RE.match(stripped)
     if match is None:
         raise RowError("invalid_amount: not a plain positive number")
+    if stripped.startswith("$") and currency not in DOLLAR_FAMILY:
+        raise RowError("invalid_amount: $ sign contradicts the currency column")
     exponent = exponent_for(currency)
     frac = match.group("frac") or ""
     if len(match.group("int")) > 25:  # before Decimal/int: huge digit strings are quadratic
