@@ -288,7 +288,9 @@ def minor_units_from_decimal_string(text: str, currency: str) -> int:
     if len(match.group("int")) > 25:  # before Decimal/int: huge digit strings are quadratic
         raise RowError("invalid_amount: implausibly large")
     if len(frac) > exponent:
-        if frac[exponent:].strip("0"):  # "5000.00" for JPY is fine; "10.50" is not
+        # Only "5000.00" for a zero-decimal currency is tolerated. "1.000" in a 2-decimal
+        # currency may be a European thousands separator (1,000), so it must be quarantined.
+        if exponent != 0 or frac.strip("0") or len(frac) > 2:
             raise RowError(f"invalid_amount: more than {exponent} decimal places for {currency}")
         frac = frac[:exponent]
     try:

@@ -709,3 +709,36 @@ def test_env_example_placeholders_are_rejected_as_real_secrets() -> None:
     ):
         with pytest.raises(ConfigError):
             Settings.from_env({"DATABASE_URL": "postgresql://h/d", name: value})
+
+
+def test_synced_entry_edited_into_a_duplicate_id_still_raises_a_change_warning(
+    engine: Engine,
+) -> None:
+    from donation_ledger.sync import run_sync
+    from tests.test_sync import TZ, ListReader, good
+
+    run_sync(engine, ListReader([good("A1", "10")]), TZ)
+    run_sync(engine, ListReader([good("A1", "10"), good("A1", "99")]), TZ)
+    assert rows(engine, "SELECT external_id, kind FROM sync_issues") == [
+        ("A1", "changed_after_sync")
+    ]
+    assert rows(engine, "SELECT amount_minor FROM donations") == [(1000,)]
+
+
+def test_decomposed_unicode_entry_id_is_the_same_donation(engine: Engine) -> None:
+    from donation_ledger.sync import run_sync
+    from tests.test_sync import TZ, ListReader, good
+
+    run_sync(engine, ListReader([good("É1", "5")]), TZ)
+    run_sync(engine, ListReader([good("É1".replace("́", "́"), "5")]), TZ)
+    run_sync(engine, ListReader([good("É1", "5")]), TZ)
+    assert rows(engine, "SELECT count(*) FROM donations") == [(1,)]
+
+
+def test_three_digit_fraction_in_a_two_decimal_currency_is_quarantined() -> None:
+    from donation_ledger.parsing import RowError, minor_units_from_decimal_string
+
+    for amount in ("1.000", "2.500", "1.0000"):
+        with pytest.raises(RowError):
+            minor_units_from_decimal_string(amount, "EUR")
+    assert minor_units_from_decimal_string("5000.00", "JPY") == 5000

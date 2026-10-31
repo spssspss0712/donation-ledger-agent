@@ -160,10 +160,20 @@ def _process_batch(
 ) -> Counters:
     c = Counters(rows_read=len(batch))
     ids = [o.entry_id for o in batch if isinstance(o, Candidate)]
+    ids += [
+        o.rejection.external_id
+        for o in batch
+        if isinstance(o, Rejected) and o.rejection.external_id
+    ]
     existing = _load_existing(session, ids)
     to_insert: list[NewDonation] = []
     for outcome in batch:
         if isinstance(outcome, Rejected):
+            ext = outcome.rejection.external_id
+            if ext is not None and ext in existing:
+                # An already-synced entry was edited into something unprocessable (e.g. its
+                # ID now appears twice): that is still a change after sync.
+                c.issues_recorded += _warn_unprocessable(session, ext, outcome.rejection, run_id)
             _quarantine(session, outcome.rejection, run_id, ignored, c)
             continue
         if outcome.entry_id in existing:
@@ -219,6 +229,24 @@ def _warn_if_changed(session: Session, row: Candidate, stored: dict[str, Any], r
         .values(
             source=SOURCE_SHEET,
             external_id=row.entry_id,
+            kind=ISSUE_CHANGED_AFTER_SYNC,
+            detail=detail,
+            detail_hash=fingerprint_of(detail),
+            sync_run_id=run_id,
+        )
+        .on_conflict_do_nothing(constraint="uq_sync_issues_dedupe")
+        .returning(SyncIssue.id)
+    )
+    return 1 if session.execute(stmt).first() is not None else 0
+
+
+def _warn_unprocessable(session: Session, ext: str, rej: Rejection, run_id: int) -> int:
+    detail = {"became_unprocessable": rej.reason.split(":")[0]}
+    stmt = (
+        pg_insert(SyncIssue)
+        .values(
+            source=SOURCE_SHEET,
+            external_id=ext,
             kind=ISSUE_CHANGED_AFTER_SYNC,
             detail=detail,
             detail_hash=fingerprint_of(detail),

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import unicodedata
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -80,6 +81,11 @@ def map_header(header: Sequence[str]) -> dict[str, int]:
     return mapping
 
 
+def _normalize_id(cell: str) -> str:
+    """NFC so an NFD re-export (e.g. from macOS) of the same ID is not a new donation."""
+    return unicodedata.normalize("NFC", _safe_cell(strip_invisible(cell)))
+
+
 def _safe_cell(value: str) -> str:
     """Make arbitrary cell text storable as JSONB (no NUL, no lone surrogates)."""
     return value.replace("\x00", "\\x00").encode("utf-8", errors="replace").decode("utf-8")
@@ -108,7 +114,7 @@ def classify_table(
             raw[name_header] = ""
         parsed.append((number, list(cells), raw))
     id_counts = Counter(
-        _safe_cell(strip_invisible(cells[mapping["entry_id"]]))
+        _normalize_id(cells[mapping["entry_id"]])
         for _, cells, _ in parsed
         if len(cells) > mapping["entry_id"] and strip_invisible(cells[mapping["entry_id"]])
     )
@@ -149,7 +155,7 @@ def _classify_row(
         i = mapping[field]
         return cells[i] if i < len(cells) else ""
 
-    entry_id = _safe_cell(strip_invisible(cell("entry_id")))
+    entry_id = _normalize_id(cell("entry_id"))
     if len(cells) > width and any(strip_invisible(c) for c in cells[width:]):
         return reject("malformed_row: more cells than header columns", entry_id)
     if len(cells) < width:

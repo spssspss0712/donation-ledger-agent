@@ -60,6 +60,9 @@ Format: context, options, choice, why, how easy to change later.
 - PaymentIntent `client_secret` (any key containing it) is dropped before storing/fingerprinting. `Settings.__repr__` hides secrets. `.env.example` placeholder values (`replace_me`/`replace-me`) are refused as real secrets, and `SHEET_SOURCE` is commented out there. `Settings.from_env` validates all variables for every entry point (a bad value in a shared env group stops the web service too): chosen for fail-fast simplicity; give each service only the variables it needs.
 - render.yaml pins `PYTHON_VERSION` (code needs 3.12+); cron services have no pre-deploy migration step, so run `alembic upgrade head` via the web service deploy first.
 
+## D7h. Round 9a
+- An edit that turns a synced entry into a rejected row (duplicate ID, short/long row, bad bytes) records a `changed_after_sync` issue too. Entry IDs are NFC-normalised. A fraction of 3+ digits in a non-zero-decimal currency (`1.000` EUR) is quarantined, since it may be a thousands separator; only `5000.00` for zero-decimal currencies is tolerated. ISK/UGX follow Stripe (2 decimals), not ISO 4217. Addresses are stored whitespace-collapsed (original text stays in `raw_payload.fields`).
+
 ## D8. Stripe mapping
 - ID = `data.object.id` (`pi_...`). Amount = `amount_received` if positive, else `amount` (the money actually captured is the truthful figure; they differ on partial capture). `created` Unix seconds => UTC.
 - A PaymentIntent has no donor name; read from (expanded) `latest_charge.billing_details` / legacy `charges.data[0]`, then `metadata.donor_name|name`, `shipping.name`; e-mail from billing details, `receipt_email`, `metadata.donor_email|email`. **Assumption** (documented in BLOCKERS.md): the website puts donor info in one of these places. No name => anonymous.
