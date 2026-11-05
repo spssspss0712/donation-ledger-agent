@@ -136,6 +136,16 @@ def test_ambiguous_dst_fallback_time_resolves_to_first_occurrence() -> None:
     )
 
 
+def test_nonexistent_spring_forward_time_resolves_deterministically_to_the_shifted_instant() -> (
+    None
+):
+    # 2026-03-08 02:30 does not exist in Los Angeles (clocks jump 02:00 -> 03:00 PDT, UTC-7);
+    # zoneinfo reads it with the pre-transition offset (UTC-8), i.e. 10:30Z = 03:30 PDT.
+    assert parse_sheet_datetime("3/8/2026 02:30", "America/Los_Angeles") == datetime(
+        2026, 3, 8, 10, 30, tzinfo=UTC
+    )
+
+
 @pytest.mark.parametrize(
     "text", ["", "not a date", "13/45/2024", "2024-02-30", "1999-12-31", "2999-01-01", "45000"]
 )
