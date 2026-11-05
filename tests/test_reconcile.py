@@ -123,3 +123,62 @@ def test_reconcile_uses_a_lock_separate_from_the_sheet_sync(engine: Engine) -> N
     finally:
         holder.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": LOCK_KEYS["sheet"]})
         holder.close()
+
+
+def test_reconciliation_fills_an_empty_email_once_and_audits_it_with_the_run_id(
+    engine: Engine, session_factory: sessionmaker[Session]
+) -> None:
+    process_event(session_factory, event(payment_intent("pi_FILL")))  # webhook without contact
+    res = reconcile(engine, FakeStripe([payment_intent("pi_FILL", receipt_email="R@X.org")]))
+    assert res.status == "succeeded" and res.counters.contacts_filled == 1
+    assert rows(engine, "SELECT donor_email FROM donations") == [("r@x.org",)]
+    run_id = rows(engine, "SELECT id FROM sync_runs")[0][0]
+    assert rows(engine, "SELECT field_name, source, sync_run_id FROM donation_contact_changes") == [
+        ("donor_email", "stripe", run_id)
+    ]
+    assert rows(engine, "SELECT contacts_filled FROM sync_runs") == [(1,)]
+    # A second reconcile finds nothing more to do.
+    again = reconcile(engine, FakeStripe([payment_intent("pi_FILL", receipt_email="R@X.org")]))
+    assert again.counters.contacts_filled == 0
+    assert rows(engine, "SELECT count(*) FROM donation_contact_changes") == [(1,)]
+
+
+def test_reconciliation_never_overwrites_a_webhook_email_and_never_changes_the_amount(
+    engine: Engine, session_factory: sessionmaker[Session]
+) -> None:
+    process_event(
+        session_factory, event(payment_intent("pi_KEEP", amount=500, receipt_email="a@x.org"))
+    )
+    reconcile(engine, FakeStripe([payment_intent("pi_KEEP", amount=900, receipt_email="b@x.org")]))
+    assert rows(engine, "SELECT donor_email, amount_minor FROM donations") == [("a@x.org", 500)]
+    assert sorted(str(r[0]) for r in rows(engine, "SELECT kind FROM sync_issues")) == [
+        "changed_after_sync",
+        "contact_changed_after_sync",
+    ]
+
+
+def test_reconciliation_batch_with_a_failure_after_a_fill_rolls_the_fill_back(
+    engine: Engine, session_factory: sessionmaker[Session]
+) -> None:
+    from sqlalchemy import event as sa_event
+
+    process_event(session_factory, event(payment_intent("pi_ATOMIC")))
+
+    def boom(conn, cursor, statement, parameters, context, executemany):  # type: ignore[no-untyped-def]
+        if statement.lstrip().upper().startswith("INSERT INTO DONATION_CONTACT_CHANGES"):
+            raise RuntimeError("injected")
+
+    sa_event.listen(engine, "before_cursor_execute", boom)
+    try:
+        res = reconcile(
+            engine,
+            FakeStripe(
+                [payment_intent("pi_NEW1"), payment_intent("pi_ATOMIC", receipt_email="x@y.org")]
+            ),
+        )
+    finally:
+        sa_event.remove(engine, "before_cursor_execute", boom)
+    assert res.status == "failed"
+    # pi_NEW1 was in the same batch as the failed fill, so it must not exist either.
+    assert rows(engine, "SELECT external_id, donor_email FROM donations") == [("pi_ATOMIC", None)]
+    assert rows(engine, "SELECT count(*) FROM sync_issues") == [(0,)]

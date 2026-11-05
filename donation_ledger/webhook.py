@@ -12,6 +12,7 @@ import stripe
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
+from donation_ledger.contacts import apply_reads
 from donation_ledger.ledger import (
     Rejection,
     fingerprint_of,
@@ -90,6 +91,8 @@ def process_event(session_factory: sessionmaker[Session], event: Mapping[str, An
             )
             return Outcome.QUARANTINED
         inserted = insert_donations(session, [mapped])
+        # Same transaction: a duplicate delivery may fill empty contact fields, never money.
+        apply_reads(session, [mapped], inserted, run_id=None)
     outcome = Outcome.CREATED if inserted else Outcome.DUPLICATE
     log.info(
         "stripe payment processed",

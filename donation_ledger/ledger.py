@@ -13,7 +13,7 @@ from sqlalchemy import case, func, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
-from donation_ledger.models import Donation, RejectedRow
+from donation_ledger.models import Donation, RejectedRow, SyncIssue
 
 
 @dataclass(frozen=True)
@@ -143,3 +143,32 @@ def record_rejection(session: Session, rej: Rejection, run_id: int | None) -> st
 
 def _reopen_unless_ignored() -> Any:
     return case((RejectedRow.status == "ignored", "ignored"), else_="open")
+
+
+def record_issue(
+    session: Session,
+    source: str,
+    external_id: str,
+    kind: str,
+    detail: dict[str, Any],
+    run_id: int | None,
+) -> int:
+    """Record a de-duplicated warning for a human. Returns 1 if it is new, else 0.
+
+    The unique key (source, external_id, kind, hash of detail) makes repeated runs and
+    concurrent writers idempotent. ``detail`` must never contain donor contact values.
+    """
+    stmt = (
+        pg_insert(SyncIssue)
+        .values(
+            source=source,
+            external_id=external_id,
+            kind=kind,
+            detail=detail,
+            detail_hash=fingerprint_of(detail),
+            sync_run_id=run_id,
+        )
+        .on_conflict_do_nothing(constraint="uq_sync_issues_dedupe")
+        .returning(SyncIssue.id)
+    )
+    return 1 if session.execute(stmt).first() is not None else 0

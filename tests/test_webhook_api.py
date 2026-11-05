@@ -294,3 +294,103 @@ def test_concurrent_deliveries_through_http_store_exactly_one_record(
         t.join()
     assert statuses == [200] * 8
     assert count(engine) == 1
+
+
+# --- contact data on duplicate deliveries (SPEC 2.3 fill-once, 2.4 webhook) -----------------
+
+
+def deliver(client: TestClient, obj: dict[str, Any], event_id: str = "evt_FAKE0001") -> Any:
+    body = encode(event(obj, event_id=event_id))
+    return post(client, body, sign(body, FAKE_WEBHOOK_SECRET))
+
+
+def test_duplicate_delivery_fills_a_missing_email_and_name_once_and_returns_2xx(
+    client: TestClient, engine: Engine
+) -> None:
+    assert deliver(client, payment_intent()).status_code == 200  # no contact details yet
+    later = payment_intent(receipt_email="Late@Example.org", metadata={"donor_name": "Late Donor"})
+    assert deliver(client, later, "evt_FAKE0002").status_code == 200
+    assert deliver(client, later, "evt_FAKE0002").status_code == 200  # and a third time
+    with engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT donor_email, donor_name, is_anonymous FROM donations")
+        ).one()
+        audit = conn.execute(
+            text("SELECT field_name, source, sync_run_id FROM donation_contact_changes ORDER BY 1")
+        ).all()
+    assert tuple(row) == ("late@example.org", "Late Donor", False)
+    assert [tuple(a) for a in audit] == [
+        ("donor_email", "stripe", None),
+        ("donor_name", "stripe", None),
+    ]
+    assert count(engine) == 1
+
+
+def test_duplicate_delivery_with_different_email_changes_nothing_and_warns(
+    client: TestClient, engine: Engine
+) -> None:
+    deliver(client, payment_intent(receipt_email="first@example.org"))
+    assert deliver(client, payment_intent(receipt_email="second@example.org")).status_code == 200
+    with engine.connect() as conn:
+        assert (
+            conn.execute(text("SELECT donor_email FROM donations")).scalar_one()
+            == "first@example.org"
+        )
+        kinds = conn.execute(text("SELECT kind FROM sync_issues")).scalars().all()
+    assert kinds == ["contact_changed_after_sync"]
+
+
+def test_duplicate_delivery_with_a_different_amount_never_changes_money(
+    client: TestClient, engine: Engine
+) -> None:
+    deliver(client, payment_intent(amount=2500))
+    assert deliver(client, payment_intent(amount=9900)).status_code == 200
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT amount_minor FROM donations")).scalar_one() == 2500
+        kinds = conn.execute(text("SELECT kind FROM sync_issues")).scalars().all()
+    assert kinds == ["changed_after_sync"]
+
+
+def test_missing_and_malformed_email_never_block_a_stripe_donation(
+    client: TestClient, engine: Engine
+) -> None:
+    assert deliver(client, payment_intent("pi_NOEMAIL")).status_code == 200
+    assert deliver(client, payment_intent("pi_BADEMAIL", receipt_email="nope")).status_code == 200
+    with engine.connect() as conn:
+        rows_ = conn.execute(
+            text("SELECT external_id, donor_email FROM donations ORDER BY external_id")
+        ).all()
+        kinds = conn.execute(text("SELECT external_id, kind FROM sync_issues")).all()
+        quarantined = conn.execute(text("SELECT count(*) FROM rejected_rows")).scalar_one()
+    assert [tuple(r) for r in rows_] == [("pi_BADEMAIL", None), ("pi_NOEMAIL", None)]
+    assert [tuple(k) for k in kinds] == [("pi_BADEMAIL", "invalid_email")]
+    assert quarantined == 0
+
+
+def test_failure_while_writing_the_audit_row_returns_5xx_and_rolls_back_the_whole_fill(
+    client: TestClient, engine: Engine
+) -> None:
+    from sqlalchemy import event as sa_event
+
+    deliver(client, payment_intent())
+
+    def boom(conn, cursor, statement, parameters, context, executemany):  # type: ignore[no-untyped-def]
+        if statement.lstrip().upper().startswith("INSERT INTO DONATION_CONTACT_CHANGES"):
+            raise RuntimeError("injected failure")
+
+    sa_event.listen(engine, "before_cursor_execute", boom)
+    try:
+        resp = deliver(client, payment_intent(receipt_email="late@example.org"))
+    finally:
+        sa_event.remove(engine, "before_cursor_execute", boom)
+    assert resp.status_code >= 500
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT donor_email FROM donations")).scalar_one() is None
+        assert conn.execute(text("SELECT count(*) FROM donation_contact_changes")).scalar_one() == 0
+    # Stripe retries; the retry now succeeds and fills it.
+    assert deliver(client, payment_intent(receipt_email="late@example.org")).status_code == 200
+    with engine.connect() as conn:
+        assert (
+            conn.execute(text("SELECT donor_email FROM donations")).scalar_one()
+            == "late@example.org"
+        )

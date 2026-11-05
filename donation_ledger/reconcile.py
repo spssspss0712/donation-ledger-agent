@@ -17,6 +17,7 @@ from sqlalchemy import Engine
 from sqlalchemy.orm import Session
 
 from donation_ledger.config import ConfigError, Settings
+from donation_ledger.contacts import apply_reads
 from donation_ledger.db import make_engine
 from donation_ledger.ledger import (
     NewDonation,
@@ -151,6 +152,9 @@ def _process(session: Session, batch: Sequence[Mapping[str, Any]], run_id: int) 
             seen.add(mapped.external_id)
             donations.append(mapped)
     inserted = insert_donations(session, donations)
+    outcome = apply_reads(session, donations, inserted, run_id)
+    c.contacts_filled += outcome.filled
+    c.issues_recorded += outcome.issues
     c.rows_inserted += len(inserted)
     c.rows_duplicate_skipped += len(donations) - len(inserted)
     return c

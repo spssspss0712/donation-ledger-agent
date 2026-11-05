@@ -40,6 +40,7 @@ class Counters:
     rows_quarantined: int = 0
     rows_ignored: int = 0
     issues_recorded: int = 0
+    contacts_filled: int = 0
 
     def add(self, other: Counters) -> None:
         for name in self.__dataclass_fields__:
@@ -139,5 +140,6 @@ def add_counters(session: Session, run_id: int, c: Counters) -> None:
             rows_quarantined=SyncRun.rows_quarantined + c.rows_quarantined,
             rows_ignored=SyncRun.rows_ignored + c.rows_ignored,
             issues_recorded=SyncRun.issues_recorded + c.issues_recorded,
+            contacts_filled=SyncRun.contacts_filled + c.contacts_filled,
         )
     )

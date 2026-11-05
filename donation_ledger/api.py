@@ -58,6 +58,7 @@ class SyncRunOut(BaseModel):
     rows_quarantined: int
     rows_ignored: int
     issues_recorded: int
+    contacts_filled: int
     error_message: str | None
 
 
