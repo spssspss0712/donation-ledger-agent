@@ -61,11 +61,8 @@ def test_database_rejects_direct_sql_update_of_each_money_field(
     engine: Engine, assignment: str
 ) -> None:
     donation_id = _insert_donation(engine)
-    with pytest.raises(exc.DBAPIError, match="immutable"):
-        with engine.begin() as conn:
-            conn.execute(
-                text(f"UPDATE donations SET {assignment} WHERE id = :i"), {"i": donation_id}
-            )
+    with pytest.raises(exc.DBAPIError, match="immutable"), engine.begin() as conn:
+        conn.execute(text(f"UPDATE donations SET {assignment} WHERE id = :i"), {"i": donation_id})
     with engine.connect() as conn:
         row = conn.execute(
             text("SELECT source, external_id, amount_minor, currency FROM donations")
@@ -77,10 +74,9 @@ def test_database_rejects_a_bulk_update_that_touches_money_even_if_one_row_is_fi
     engine: Engine,
 ) -> None:
     _insert_donation(engine)
-    with pytest.raises(exc.DBAPIError, match="immutable"):
-        with engine.begin() as conn:
-            # Setting a money column to its current value is harmless; changing it is not.
-            conn.execute(text("UPDATE donations SET amount_minor = 1000, currency = 'GBP'"))
+    with pytest.raises(exc.DBAPIError, match="immutable"), engine.begin() as conn:
+        # Setting a money column to its current value is harmless; changing it is not.
+        conn.execute(text("UPDATE donations SET amount_minor = 1000, currency = 'GBP'"))
 
 
 def test_database_allows_money_columns_to_be_rewritten_with_the_same_values(engine: Engine) -> None:
@@ -189,9 +185,8 @@ def test_upgrading_a_populated_version_1_database_keeps_every_row_and_leaves_ema
     assert tuple(run) == ("succeeded", 3, 0)
     assert tuple(counts) == (1, 1, 0)
     # The trigger exists on the upgraded database as well.
-    with pytest.raises(exc.DBAPIError, match="immutable"):
-        with eng.begin() as conn:
-            conn.execute(text("UPDATE donations SET amount_minor = 1 WHERE id = 1"))
+    with pytest.raises(exc.DBAPIError, match="immutable"), eng.begin() as conn:
+        conn.execute(text("UPDATE donations SET amount_minor = 1 WHERE id = 1"))
     eng.dispose()
 
 
