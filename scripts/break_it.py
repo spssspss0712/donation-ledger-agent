@@ -154,8 +154,38 @@ MUTATIONS = [
     Mutation(
         "stripe_ignores_metadata_email_fallback",
         "donation_ledger/stripe_mapping.py",
+        'return name, _email(raw.get("receipt_email"), raw_meta.get("donor_email"))',
+        'return name, _email(raw.get("receipt_email"))',
+    ),
+    Mutation(
+        "stripe_email_validated_after_sanitising",
+        "donation_ledger/stripe_mapping.py",
+        'return name, _email(raw.get("receipt_email"), raw_meta.get("donor_email"))',
         'return name, _email(pi.get("receipt_email"), metadata.get("donor_email"))',
-        'return name, _email(pi.get("receipt_email"))',
+    ),
+    Mutation(
+        "email_with_lone_surrogate_accepted",
+        "donation_ledger/parsing.py",
+        '("Cc", "Cf", "Cs")',
+        '("Cc", "Cf")',
+    ),
+    Mutation(
+        "stripe_currency_whitelist_restored",
+        "donation_ledger/stripe_mapping.py",
+        "    if len(code) != 3 or not code.isascii() or not code.isalpha():",
+        "    from donation_ledger.parsing import ISO_4217\n\n    if code.upper() not in ISO_4217 or not code.isascii():",
+    ),
+    Mutation(
+        "stripe_currency_accepts_non_letters",
+        "donation_ledger/stripe_mapping.py",
+        "    if len(code) != 3 or not code.isascii() or not code.isalpha():",
+        "    if len(code) != 3:",
+    ),
+    Mutation(
+        "sheet_currency_whitelist_removed",
+        "donation_ledger/parsing.py",
+        "    if not raw.isascii() or code not in ISO_4217:",
+        "    if not raw.isascii() or len(code) != 3:",
     ),
     Mutation(
         "followups_leaks_email",
@@ -237,16 +267,32 @@ def run_tests() -> list[str]:
     return [ln.split(" ")[1] for ln in proc.stdout.splitlines() if ln.startswith("FAILED ")]
 
 
+def stale(mutations: list[Mutation]) -> list[str]:
+    """Names of mutations whose target text is not found EXACTLY ONCE (or that change nothing)."""
+    bad: list[str] = []
+    for m in mutations:
+        text = (ROOT / m.path).read_text(encoding="utf-8")
+        edits = [(m.old, m.new), *m.extra]
+        if any(text.count(old) != 1 for old, _ in edits) or all(old == new for old, new in edits):
+            bad.append(f"{m.name} ({m.path})")
+    return bad
+
+
 def main(argv: list[str]) -> int:
     selected = [m for m in MUTATIONS if not argv or any(a in m.name for a in argv)]
+    # Check every selected target BEFORE running anything: a stale mutation would otherwise
+    # be skipped and the run could still look green.
+    broken = stale(selected)
+    if broken:
+        print("ERROR: these mutations no longer match the code exactly once; update them:")
+        for name in broken:
+            print(f"  - {name}")
+        print("Nothing was run.")
+        return 2
     missed = 0
     for m in selected:
         path = ROOT / m.path
         original = path.read_text(encoding="utf-8")
-        if original.count(m.old) != 1:
-            print(f"!! {m.name}: pattern not found exactly once in {m.path}")
-            missed += 1
-            continue
         try:
             mutated = original.replace(m.old, m.new)
             for old, new in m.extra:
