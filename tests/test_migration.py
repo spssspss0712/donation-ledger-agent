@@ -218,3 +218,52 @@ def test_downgrade_removes_trigger_audit_table_and_counter_column_and_keeps_dona
         conn.execute(text("UPDATE donations SET amount_minor = 6"))  # trigger gone
         assert conn.execute(text("SELECT count(*) FROM donations")).scalar_one() == 1
     eng.dispose()
+
+
+def test_version_2_sync_on_an_upgraded_version_1_database_fills_contacts_without_false_warnings(
+    scratch_url: str,
+) -> None:
+    from donation_ledger.sync import run_sync
+    from tests.test_sync import ListReader
+
+    _alembic(scratch_url, "0001")
+    eng = make_engine(scratch_url)
+    with eng.begin() as conn:
+        # Exactly what version 1 stored for a sheet row: 7 field keys, no donor_email key.
+        conn.execute(
+            text(
+                "INSERT INTO donations (source, external_id, donor_name, donor_address, recipient,"
+                " amount_minor, currency, donated_at, is_anonymous, raw_payload) VALUES "
+                "('sheet', 'V1-A', NULL, '1 Road', 'Fund', 1000, 'USD', '2024-03-01T08:00:00Z',"
+                ' true, \'{"fields": {"entry_id": "V1-A", "date": "2024-03-01",'
+                ' "donor_name": "", "donor_address": "1 Road", "amount": "10",'
+                ' "currency": "USD", "recipient": "Fund"}, "extra": {}, "sheet_row": 2}\')'
+            )
+        )
+    _alembic(scratch_url, "head")
+    header = [
+        "Entry ID", "Date", "Donor Name", "Donor Email", "Donor Address", "Amount", "Currency",
+        "Recipient",
+    ]  # fmt: skip
+    sheet = ListReader(
+        [["V1-A", "2024-03-01", "Ann", "Ann@Example.org", "1 Road", "10", "USD", "Fund"]],
+        header=header,
+    )
+    res = run_sync(eng, sheet, "America/Los_Angeles", 500)
+    assert res.status == "succeeded" and res.counters.contacts_filled == 2
+    with eng.connect() as conn:
+        row = conn.execute(
+            text("SELECT donor_name, is_anonymous, donor_email, amount_minor FROM donations")
+        ).one()
+        issues = conn.execute(text("SELECT count(*) FROM sync_issues")).scalar_one()
+        fields = (
+            conn.execute(
+                text("SELECT field_name FROM donation_contact_changes ORDER BY field_name")
+            )
+            .scalars()
+            .all()
+        )
+    assert tuple(row) == ("Ann", False, "ann@example.org", 1000)
+    assert issues == 0  # a missing donor_email key in the v1 raw payload is not a "change"
+    assert fields == ["donor_email", "donor_name"]
+    eng.dispose()
