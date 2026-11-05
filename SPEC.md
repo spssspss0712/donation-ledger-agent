@@ -1,6 +1,14 @@
-# SPEC: donation-ledger
+# SPEC: donation-ledger (version 2)
 
 This is the complete specification for the agent. Read it in full before you start working. Code, comments, commit messages, and the README must all be written in English.
+
+**What changed since version 1** (everything else is unchanged):
+
+1. Donor email is now part of the data model. The Sheet gets a `Donor Email` column (eight columns in total). Name stays optional on both sources.
+2. Where Stripe donor details live is now specified (see 2.2 and 2.3): a PaymentIntent has no top-level donor name and no `charges` list.
+3. The ledger is no longer fully append-only. **Money fields are immutable. Contact fields may be filled in once, when they are still empty.** Every fill is audited.
+4. A donation is never refused or quarantined because contact information is missing or invalid.
+5. Stricter test-quality rules in sections 3 and 5.4 (atomicity of whole batches, and "break it" checks you run yourself).
 
 ---
 
@@ -38,10 +46,17 @@ A nonprofit's website accepts donations through Stripe. In addition, staff manua
 
 | Source | Fields it has | Fields it lacks |
 | --- | --- | --- |
-| Stripe | Payment ID (starts with `pi_`), amount (smallest currency unit), currency, creation time (Unix timestamp), donor name and email (may or may not be present) | Address, recipient |
-| Google Sheet | `Entry ID`, `Date`, `Donor Name` (may be blank), `Donor Address`, `Amount`, `Currency` (may be blank, defaults to USD), `Recipient` | Email, payment ID |
+| Stripe | Payment ID (starts with `pi_`), amount (smallest currency unit), currency, creation time (Unix timestamp). Donor name and email are not top-level fields of a PaymentIntent; see section 2.3 | Address (not collected in this version), recipient |
+| Google Sheet | `Entry ID`, `Date`, `Donor Name` (may be blank), `Donor Email` (should be filled in, but may be missing or wrong), `Donor Address`, `Amount`, `Currency` (may be blank, defaults to USD), `Recipient` | Payment ID |
 
 Consult the official Stripe and Google documentation to confirm the real structure of Stripe event objects and the signature algorithm. Do not guess from memory.
+
+Facts about the Stripe `PaymentIntent` object that this specification relies on (confirmed against the current API reference and the current Python SDK types):
+
+- It has no `charges` list. The older `charges.data[0].billing_details` path does not exist in the current API version.
+- `latest_charge` is a nullable string (a Charge ID) unless it is expanded. A webhook event normally carries only the ID, so the Charge's `billing_details` are normally NOT available in a `payment_intent.succeeded` event.
+- It has no top-level donor name. The fields that can carry donor details are `receipt_email` (nullable string), `shipping` (nullable object), `metadata` (a key/value map that our own website controls), and `customer` (an ID only).
+- If `receipt_email` is set in live mode, Stripe sends the donor a receipt by itself.
 
 ### 2.3 Decisions already made (do not re-decide)
 
@@ -56,10 +71,20 @@ These are the places that are easy to leave ambiguous, and they have been decide
 | Amount | Store as an integer in the smallest currency unit (US cents). Never use floating point. Sheet amounts may look like `1000`, `1,000.50`, or `$1,000.50`; all must be parsed. Rows that cannot be parsed, or are zero or negative, are quarantined |
 | Currency | Uppercase ISO 4217 code. If the Sheet leaves it blank, default to USD. No currency conversion |
 | Time | Store UTC in the database. Interpret Sheet dates using the environment variable `SHEET_TIMEZONE` (default `America/Los_Angeles`) |
-| Anonymous | If the Sheet's `Donor Name` is blank or is "anonymous" (case-insensitive), or Stripe has no name, store `donor_name = NULL` and `is_anonymous = true`. The word "Anonymous" appears only in the presentation layer and is never stored in the database |
+| Anonymous | Donor name is optional on both sources. If the Sheet's `Donor Name` is blank or is "anonymous" (case-insensitive), or Stripe provides no name, store `donor_name = NULL` and `is_anonymous = true`. The word "Anonymous" appears only in the presentation layer and is never stored in the database |
 | Duplicate delivery | The same event or the same row delivered any number of times gives exactly the same result as delivering it once, and the webhook still returns 2xx |
-| Synced record changed upstream | The ledger is append-only. If a row already synced from the Sheet is later edited, do not modify the database; only record a "changed after sync" warning (in `sync_issues`) |
+| Synced record changed upstream | Money fields (`amount_minor`, `currency`, `donated_at`, `source`, `external_id`) are immutable. If a money field differs on a later read, change nothing and record a "changed after sync" warning in `sync_issues`. Contact fields follow the fill-once rule below |
 | Rows deleted from the Sheet | Ignore them. Do not delete database records |
+| Stripe donor details | Read the donor name from `metadata.donor_name` and the donor email from `receipt_email`, falling back to `metadata.donor_email`. The website collects them; name is optional, email is requested on the form. Billing details of the Charge, the Charge's address, and the `charge.succeeded` event are out of scope in this version (document this as a possible future extension) |
+| Donor email | Trim, lowercase, maximum 254 characters, and a simple syntax check (exactly one `@`, no whitespace, a domain part containing a dot). A missing email is stored as `NULL`. A non-empty but malformed email is also stored as `NULL`, the original text stays in `raw_payload`, and a `sync_issues` warning of kind `invalid_email` is recorded. **A donation is never refused or quarantined because of its contact information, because the money has already been received and the ledger must match Stripe** |
+| Follow-up list | A donation whose `donor_email` is `NULL` is "in need of follow-up". Provide `GET /followups` (token-protected, paginated) listing donation ID, source, external ID, date, and the reason (`missing_email` or `invalid_email`). It must never return an email address or an address |
+| Contact fields, fill-once | Contact fields are `donor_name`, `donor_email`, `donor_address`, `recipient`. When a donation already exists and one of its contact fields is `NULL`, and a later read of the same donation (a duplicate webhook delivery, the reconciliation job, or the next Sheet sync) provides a valid value for it, update only that field, using a conditional update (`... WHERE field IS NULL`) so that concurrent writers cannot overwrite each other. Never overwrite a non-`NULL` value. Never set a field back to `NULL`. If a non-`NULL` contact value differs from a later read, change nothing and record a warning of kind `contact_changed_after_sync` for a human to review. Filling `donor_name` must also update `is_anonymous` in the same statement, because of the database check `is_anonymous = (donor_name IS NULL)` |
+| Contact-fill audit | Every fill writes one row to a `donation_contact_changes` table: donation ID, field name, source, sync or reconcile run ID (if any), timestamp. Do not store the new value there (it is already in `donations`) |
+| Immutable money columns, enforced in the database | Add a database trigger (or equivalent) that rejects any `UPDATE` that changes a money field of `donations`, so that a bug in application code cannot silently rewrite money. Write a test that attempts such an update directly in SQL |
+| Strictness | Quarantining is deliberately stricter than best-effort parsing, to avoid silently wrong money: ambiguous amounts such as `1.000` or `1,00`, truncated rows (fewer cells than headers), `$` combined with a non-dollar currency, undecodable bytes, and NUL characters are quarantined. This strictness is wanted |
+| Identical bad rows | Byte-identical bad rows are tracked as separate quarantine entries (include the occurrence number in the fingerprint). Ignoring one must not silence another |
+| Quarantined row that disappears from the Sheet | Its quarantine entry becomes `absent` (not `resolved`) and reopens if the same row returns |
+| Sheet locale | Read the Sheet as display strings. Assume an English (US) spreadsheet locale; dates are ISO 8601 or `M/D/YYYY`, numbers use `.` as the decimal separator and `,` as the thousands separator. Document this assumption in the README |
 | Refunds and disputes | Out of scope. For unrecognized Stripe event types, return 2xx and log them; do not write to any table and do not raise an error |
 | Quarantined rows | Write them to a `rejected_rows` table: source, external ID (if any), the raw row, the reason, and the sync run ID. They are retried on the next sync until they pass or are manually marked as ignored. A quarantined row must never be skipped forever because of a "last synced position" |
 
@@ -67,13 +92,13 @@ These are the places that are easy to leave ambiguous, and they have been decide
 
 **Database:**
 
-- Tables: `donations`, `sync_runs`, `rejected_rows`, `sync_issues`. Manage migrations with Alembic.
+- Tables: `donations`, `sync_runs`, `rejected_rows`, `sync_issues`, `donation_contact_changes`. Manage migrations with Alembic.
 - `sync_runs` contains at least: ID, source, start time, end time, status (running, succeeded, failed, partial), rows read, rows inserted, duplicate rows skipped, rows quarantined, error message.
 
 **Stripe webhook:** `POST /webhooks/stripe`
 
 - Verify the signature first. Return 400 and write nothing if the signature is wrong or missing.
-- Handle the `payment_intent.succeeded` event.
+- Handle the `payment_intent.succeeded` event. A duplicate delivery of an event for an existing donation may fill empty contact fields (see the fill-once rule) but never changes money fields.
 - Return 2xx when the write succeeds or the record already exists. Return 5xx when the database write fails, so that Stripe retries automatically.
 - You must verify the signature against the raw request body. Do not parse and re-serialize first.
 
@@ -81,10 +106,13 @@ These are the places that are easy to leave ambiguous, and they have been decide
 
 **Google Sheet sync:** Command-line entry point `python -m donation_ledger.sync`, triggered by an external scheduler.
 
-- Each batch is written inside one database transaction, and the whole batch rolls back on failure.
+- Each batch is written inside one database transaction, and the whole batch rolls back on failure. This covers everything the batch writes: donations, contact fills, quarantine records, warnings, and counters. Nothing from a failed batch may remain, and a test must prove it.
+- The header must contain all eight columns (`Entry ID`, `Date`, `Donor Name`, `Donor Email`, `Donor Address`, `Amount`, `Currency`, `Recipient`). A missing or duplicated column fails the run without writing anything.
 - Prevent two sync jobs from running at the same time (a lock or a lock record).
 - A rerun must be correct at any time. Either a "last synced position" or a "full comparison every run" is acceptable. You choose, but explain the trade-off in `DECISIONS.md`.
 - Put the code that reads the Sheet behind an interface. Provide a CSV implementation for offline use and tests, and a real Google Sheets implementation (without credentials it only needs to be written, not verified, and must be clearly marked "unverified").
+
+**Contact data:** implement the donor email, fill-once, audit, and follow-up rules from section 2.3 for all three paths that can see a donation again: webhook duplicates, the reconciliation job, and the Sheet sync.
 
 **Read-only API:** `GET /donations` (paginated, filterable by source, anonymous donors shown as Anonymous), `GET /sync-runs`, `GET /health`.
 
@@ -108,6 +136,7 @@ These are the places that are easy to leave ambiguous, and they have been decide
 - Concurrent-deduplication tests must use real multi-threaded or multi-process concurrent writes.
 - Fault-injection tests: deliberately raise an error midway through a sync, simulate a dropped database connection, then rerun and verify the final data is correct.
 - Every test name must say what behavior it verifies.
+- **Every safety property needs a test that fails when the property is removed.** Examples: the unique constraint, the signature check, whole-batch atomicity (including quarantine records written inside the batch), the immutability of money fields, exact decimal amounts, timezone conversion with asserted UTC values, and the sync lock. You must verify this yourself by temporarily breaking the code (section 5.4) and record the results.
 - **Never delete a test, weaken an assertion, or hardcode a result to make a test pass.** When a test fails, fix the code, unless the test's own expectation is wrong, in which case say so in `DECISIONS.md`.
 
 **CI:** GitHub Actions with a PostgreSQL service container, running the tests, lint (ruff), and type checking.
@@ -147,7 +176,7 @@ The work has three phases. **Phase A needs no credentials and must be fully comp
 
 - **Stripe:** Use the signature algorithm in the official documentation to generate fake events with a valid `Stripe-Signature` (format: `t=<timestamp>,v1=<HMAC-SHA256(secret, "<timestamp>.<raw request body>")>`; the official documentation is authoritative), and verify them with the SDK's `Webhook.construct_event`. This lets signature verification be tested fully offline.
 - **Stripe reconciliation:** Put "fetch recent payment intents" behind an interface and test it with a fake. Without credentials, the real implementation only needs to be written and marked "not verified in a real environment".
-- **Google Sheet:** Implement the same interface with a CSV file. Provide a sample CSV with a variety of bad data (blank names, inconsistent amount formats, duplicate `Entry ID`s, missing `Entry ID`s, negative amounts, and so on).
+- **Google Sheet:** Implement the same interface with a CSV file. Provide a sample CSV with a variety of bad data (blank names, missing and malformed emails, inconsistent amount formats, duplicate `Entry ID`s, missing `Entry ID`s, negative amounts, and so on), and a second CSV in which some of the previously empty contact cells are completed, to demonstrate the fill-once rule.
 - **Deployment:** Only the deployment configuration and instructions need to be written; no actual deployment is needed.
 
 ### What not to do
@@ -207,8 +236,9 @@ You are prone to bias about what you just wrote, so look for faults on purpose. 
 
 1. **Have an independent review subagent review the work.** It sees only `SPEC.md` and the code, not your reasoning, and its goal is to find paths that cause duplicate, lost, or wrong data, or a hang.
 2. **Write tests that deliberately try to break your own work.** For example: the same event delivered concurrently, a sync process killed halfway, odd amount formats, empty values and very long strings, duplicate `Entry ID`s, timezone boundaries, renamed spreadsheet columns, Stripe events arriving out of order, and one donation triggering several events.
-3. Fix every problem you find, turn it into a test, and record it in `EXPERIMENT_REPORT.md`.
-4. Repeat until **two consecutive rounds find nothing new**.
+3. **Break your own code on purpose.** For each safety property listed in section 3, temporarily remove or weaken the code that provides it, run the tests, and confirm that at least one test fails. If none fails, add the missing test. Restore the code, and record a table of what you broke and which tests caught it in `EXPERIMENT_REPORT.md`.
+4. Fix every problem you find, turn it into a test, and record it in `EXPERIMENT_REPORT.md`.
+5. Repeat until **two consecutive rounds find nothing new**.
 
 ### 5.5 Budget and stopping conditions
 
@@ -239,14 +269,14 @@ You are prone to bias about what you just wrote, so look for faults on purpose. 
 | `EXPERIMENT_REPORT.md` | See the structure below |
 | Offline demo | Runs with one command; see below |
 | `.env.example`, `.gitignore` | Contain no real secrets |
-| Sample data | A CSV with a variety of bad data, and several fake Stripe events |
+| Sample data | A CSV with a variety of bad data, a second CSV that completes some previously empty contact cells, and fake Stripe events: with `receipt_email`, with `metadata` name and email, and with neither |
 
 ### README structure
 
 1. What the project is and what problem it solves (three sentences).
 2. An architecture diagram (use Mermaid): the two sources, the unified table, and the sync job.
 3. Data model: an explanation of each table and each key field.
-4. **Correctness and recovery:** one or two paragraphs explaining clearly why duplicates cannot occur and how the system recovers after a failure. This is the most important section.
+4. **Correctness and recovery:** one or two paragraphs explaining clearly why duplicates cannot occur and how the system recovers after a failure. State the contact-data policy as well: money fields are immutable, contact fields are filled in once, a missing email never blocks a donation. This is the most important section.
 5. How to run: offline mode and real-integration mode.
 6. How to test.
 7. Design trade-offs: what you considered and why you chose what you chose.
@@ -262,7 +292,8 @@ One command (for example `make demo`) that shows the following in order, printin
 3. Send an event with a wrong signature; it is rejected.
 4. Run the sync on a CSV containing bad data; good rows are inserted, bad rows are quarantined with a reason.
 5. Simulate a failure midway through a sync, then rerun; the data has no duplicates and nothing is missing.
-6. Print the final tables and `sync_runs`.
+6. Run the sync again with the second CSV: previously empty emails are filled in once, an existing different email is not overwritten (a warning is recorded), no money field changes, and the audit table shows each fill.
+7. Print the final tables, the follow-up list, and `sync_runs`.
 
 ### `EXPERIMENT_REPORT.md` structure
 
