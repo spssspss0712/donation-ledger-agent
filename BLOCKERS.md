@@ -1,5 +1,18 @@
 # BLOCKERS and ASSUMPTIONS
 
+## Version 2 (branch agent/v2)
+- **Blockers:** none for Phase A. Phase B (real Stripe test mode / real Google Sheet) and Phase C (Render) were again not attempted. No `sk_live_` key was seen (only environment variable names were checked, never printed).
+- The "known data-quality gap" below (named Stripe donors stored as anonymous because the ledger never back-fills) is **resolved by the v2 specification**: contact fields are filled in once by later reads (duplicate webhook, reconciliation, sheet sync).
+
+### V2 assumptions (safest choice taken; please confirm)
+1. **NUL / undecodable bytes vs. "contact info never quarantines".** The spec contradicts itself slightly: Strictness says NUL and undecodable bytes are quarantined; the email rule says a donation is never quarantined because of contact information. Taken: only the *Donor Email* cell is exempt (bad bytes there -> `invalid_email`, row ingested); NUL / bad bytes in any other cell (name, address, recipient too) still quarantine the row. If you want name/address/recipient exempt as well, the row would have to be stored with the bad characters stripped or the field NULL; that changes what the ledger holds for a donor, so it was not done unasked.
+2. **Over-long name / address / recipient** (more than 500 / 2000 / 500 characters) are cut and flagged (`contact_truncated`) rather than quarantined (v1 quarantined them), because contact info must never block a donation. Alternative: store NULL and warn.
+3. **Money mismatch blocks contact fill.** A later read of an existing donation whose amount, currency or date differs is only a `changed_after_sync` warning; its contact values are not used to fill empty fields (it may be a different donation that reuses an ID). Alternative: fill anyway.
+4. **`invalid_email` is also recorded when a donation already has a valid email** and a later read has a malformed one (de-duplicated); harmless, the follow-up list only reads donations whose email is NULL.
+5. **Follow-up `date`** is the donation date (`donated_at`), not the date the problem was noticed.
+6. **Contact fields are not protected by a trigger** (only money is, as specified), so a human can correct an email with a plain UPDATE.
+7. **Migration upgrade test needs `CREATEDB`** on the test role (it creates a scratch database).
+
 ## Blockers (nothing was blocked for Phase A)
 - None. Phase B (real Stripe test mode, real Google Sheet) and Phase C (Render) were not attempted: no credentials were provided. No `sk_live_` key was found in the environment (checked env var names for `stripe`/`sk_`).
 

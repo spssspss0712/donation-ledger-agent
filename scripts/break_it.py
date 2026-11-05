@@ -1,0 +1,264 @@
+"""Break the code on purpose (SPEC 5.4 step 3): for each safety property, weaken the code that
+provides it, run the test suite, and report which tests caught it. Restores every file.
+
+    python scripts/break_it.py            # all mutations
+    python scripts/break_it.py fill_once  # only mutations whose name contains this text
+
+Needs the same PostgreSQL as the tests. A mutation that no test catches is a missing test.
+"""
+
+from __future__ import annotations
+
+import subprocess
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+
+
+@dataclass(frozen=True)
+class Mutation:
+    name: str
+    path: str
+    old: str
+    new: str
+
+
+MUTATIONS = [
+    # --- version 2 rules ---
+    Mutation(
+        "money_trigger_removed",
+        "migrations/versions/0002_contact_fill_once.py",
+        """    op.execute(
+        "CREATE TRIGGER trg_donations_money_immutable BEFORE UPDATE ON donations "
+        "FOR EACH ROW EXECUTE FUNCTION donations_reject_money_update()"
+    )""",
+        "    pass",
+    ),
+    Mutation(
+        "money_trigger_ignores_currency",
+        "migrations/versions/0002_contact_fill_once.py",
+        "       OR NEW.currency IS DISTINCT FROM OLD.currency\n",
+        "",
+    ),
+    Mutation(
+        "money_trigger_ignores_donated_at",
+        "migrations/versions/0002_contact_fill_once.py",
+        "       OR NEW.donated_at IS DISTINCT FROM OLD.donated_at\n",
+        "",
+    ),
+    Mutation(
+        "fill_once_condition_removed",
+        "donation_ledger/contacts.py",
+        ".where(Donation.id == row.id, getattr(Donation, field).is_(None))",
+        ".where(Donation.id == row.id)",
+    ),
+    Mutation(
+        "fill_once_overwrites_existing_value",
+        "donation_ledger/contacts.py",
+        "    if current is None:\n        if _fill(",
+        "    if True:\n        if _fill(",
+    ),
+    Mutation(
+        "fill_once_blank_read_not_ignored",
+        "donation_ledger/contacts.py",
+        "    if new is None:\n        return  # a read without a value never clears anything\n",
+        "",
+    ),
+    Mutation(
+        "fill_name_without_is_anonymous",
+        "donation_ledger/contacts.py",
+        '        values["is_anonymous"] = False\n',
+        "        pass\n",
+    ),
+    Mutation(
+        "fill_without_audit_row",
+        "donation_ledger/contacts.py",
+        "    session.add(\n        DonationContactChange(\n            donation_id=row.id, field_name=field, source=source, sync_run_id=run_id\n        )\n    )\n    session.flush()\n",
+        "",
+    ),
+    Mutation(
+        "audit_written_outside_the_batch_transaction",
+        "donation_ledger/contacts.py",
+        "    session.add(\n        DonationContactChange(\n            donation_id=row.id, field_name=field, source=source, sync_run_id=run_id\n        )\n    )\n    session.flush()\n",
+        "    with Session(session.get_bind()) as other, other.begin():\n        other.add(\n            DonationContactChange(\n                donation_id=row.id, field_name=field, source=source, sync_run_id=run_id\n            )\n        )\n",
+    ),
+    Mutation(
+        "differing_contact_value_not_reported",
+        "donation_ledger/contacts.py",
+        "    if current != new:\n        out.issues +=",
+        "    if False:\n        out.issues +=",
+    ),
+    Mutation(
+        "fill_even_when_money_differs",
+        "donation_ledger/contacts.py",
+        "            continue\n        for field in CONTACT_FIELDS:",
+        "            pass\n        for field in CONTACT_FIELDS:",
+    ),
+    Mutation(
+        "money_difference_not_reported",
+        "donation_ledger/contacts.py",
+        "        if check_money and changed_money:",
+        "        if False:",
+    ),
+    Mutation(
+        "quarantine_written_outside_the_batch_transaction",
+        "donation_ledger/sync.py",
+        "    record_rejection(session, rej, run_id)\n    c.rows_quarantined += 1",
+        "    with Session(session.get_bind()) as other, other.begin():\n        record_rejection(other, rej, run_id)\n    c.rows_quarantined += 1",
+    ),
+    Mutation(
+        "invalid_email_rejects_the_donation",
+        "donation_ledger/sheet_rows.py",
+        "        email = normalize_email(email_cell)\n",
+        '        email = normalize_email(email_cell)\n        if email.invalid_text is not None:\n            raise RowError("invalid_email: rejected")\n',
+    ),
+    Mutation(
+        "email_without_domain_dot_accepted",
+        "donation_ledger/parsing.py",
+        '    if not local or "." not in domain:',
+        "    if not local:",
+    ),
+    Mutation(
+        "email_not_lowercased",
+        "donation_ledger/parsing.py",
+        "    email = text.lower()\n",
+        "    email = text\n",
+    ),
+    Mutation(
+        "email_length_limit_removed",
+        "donation_ledger/parsing.py",
+        "    if len(email) > MAX_EMAIL_LEN or email.count",
+        "    if email.count",
+    ),
+    Mutation(
+        "header_does_not_require_donor_email",
+        "donation_ledger/sheet_rows.py",
+        '    "donor_email": "donor email",\n',
+        "",
+    ),
+    Mutation(
+        "invalid_email_warning_not_recorded",
+        "donation_ledger/contacts.py",
+        "        if item.invalid_email is not None:\n",
+        "        if False:\n",
+    ),
+    Mutation(
+        "stripe_reads_billing_details",
+        "donation_ledger/stripe_mapping.py",
+        '    name = _first_text(metadata.get("donor_name"))',
+        '    charge = pi.get("latest_charge")\n    billing = charge.get("billing_details") if isinstance(charge, Mapping) else None\n    name = _first_text(metadata.get("donor_name"), (billing or {}).get("name"))',
+    ),
+    Mutation(
+        "stripe_ignores_metadata_email_fallback",
+        "donation_ledger/stripe_mapping.py",
+        'return name, _email(pi.get("receipt_email"), metadata.get("donor_email"))',
+        'return name, _email(pi.get("receipt_email"))',
+    ),
+    Mutation(
+        "followups_leaks_email",
+        "donation_ledger/api.py",
+        '                reason="invalid_email" if r[4] else "missing_email",',
+        '                reason="invalid_email" if r[4] else "missing_email",\n                email="leak",',
+    ),
+    Mutation(
+        "followups_lists_donations_that_have_an_email",
+        "donation_ledger/api.py",
+        "            .where(Donation.donor_email.is_(None))\n",
+        "",
+    ),
+    Mutation(
+        "followups_without_auth",
+        "donation_ledger/api.py",
+        '@app.get("/followups", response_model=FollowupPage, dependencies=[Depends(require_token)])',
+        '@app.get("/followups", response_model=FollowupPage)',
+    ),
+    Mutation(
+        "webhook_duplicate_does_not_fill",
+        "donation_ledger/webhook.py",
+        "        apply_reads(session, [mapped], inserted, run_id=None)\n",
+        "",
+    ),
+    Mutation(
+        "reconcile_does_not_fill",
+        "donation_ledger/reconcile.py",
+        "    outcome = apply_reads(session, donations, inserted, run_id)\n",
+        "    outcome = apply_reads(session, [], inserted, run_id)\n",
+    ),
+    # --- version 1 properties (SPEC section 3 list) ---
+    Mutation(
+        "unique_constraint_removed",
+        "migrations/versions/0001_initial.py",
+        '        sa.UniqueConstraint("source", "external_id", name="uq_donations_source_external_id"),\n',
+        "",
+    ),
+    Mutation(
+        "signature_not_verified",
+        "donation_ledger/webhook.py",
+        "        stripe.Webhook.construct_event(raw_body, signature_header, secret, tolerance=tolerance)\n",
+        "",
+    ),
+    Mutation(
+        "amount_parsed_with_float",
+        "donation_ledger/parsing.py",
+        "    minor = int(value.scaleb(exponent))",
+        "    minor = int(float(value) * 10**exponent)",
+    ),
+    Mutation(
+        "sheet_timezone_ignored",
+        "donation_ledger/parsing.py",
+        "        parsed = parsed.replace(tzinfo=ZoneInfo(tz_name))",
+        '        parsed = parsed.replace(tzinfo=ZoneInfo("UTC"))',
+    ),
+    Mutation(
+        "sync_lock_not_taken",
+        "donation_ledger/runs.py",
+        "        if not acquired:\n            raise LockNotAcquiredError(source)",
+        "        if False:\n            raise LockNotAcquiredError(source)",
+    ),
+    Mutation(
+        "batch_not_atomic_commit_per_statement",
+        "donation_ledger/sync.py",
+        "    inserted = insert_donations(session, to_insert)\n    c.rows_inserted += len(inserted)\n",
+        "    inserted = insert_donations(session, to_insert)\n    session.commit()\n    c.rows_inserted += len(inserted)\n",
+    ),
+]
+
+
+def run_tests() -> list[str]:
+    proc = subprocess.run(  # noqa: S603
+        [sys.executable, "-m", "pytest", "-q", "--tb=no", "-p", "no:cacheprovider", "--maxfail=40"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+    return [ln.split(" ")[1] for ln in proc.stdout.splitlines() if ln.startswith("FAILED ")]
+
+
+def main(argv: list[str]) -> int:
+    selected = [m for m in MUTATIONS if not argv or any(a in m.name for a in argv)]
+    missed = 0
+    for m in selected:
+        path = ROOT / m.path
+        original = path.read_text(encoding="utf-8")
+        if original.count(m.old) != 1:
+            print(f"!! {m.name}: pattern not found exactly once in {m.path}")
+            missed += 1
+            continue
+        try:
+            path.write_text(original.replace(m.old, m.new), encoding="utf-8")
+            failed = run_tests()
+        finally:
+            path.write_text(original, encoding="utf-8")
+        verdict = "CAUGHT" if failed else "NOT CAUGHT  <-- add a test"
+        missed += 0 if failed else 1
+        print(f"{verdict}: {m.name} ({len(failed)} failing)")
+        for name in failed[:4]:
+            print(f"      {name}")
+    print(f"\n{len(selected) - missed}/{len(selected)} mutations caught")
+    return 1 if missed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

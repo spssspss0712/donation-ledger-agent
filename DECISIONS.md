@@ -100,3 +100,77 @@ fastapi + uvicorn (spec), SQLAlchemy 2 + alembic + psycopg 3 (spec; psycopg bina
 
 ## D14. Clock/timezone for `donated_at` of sheet rows without time
 - Midnight in `SHEET_TIMEZONE`. A donation on 31 Dec local evening lands on 1 Jan in UTC; this is correct for storage and is covered by tests.
+
+---
+
+# Version 2 decisions
+
+Everything below is new in version 2 (SPEC.md v2). Decisions D1-D14 above still stand unless a V2 entry says otherwise.
+
+## V2-1. Where contact policy lives: one function, three callers
+- **Context:** three paths can see a donation again (webhook duplicate, reconciliation, sheet sync). Implementing the rules three times would let them drift.
+- **Choice:** `contacts.apply_reads` is called by all three right after `insert_donations`, inside the caller's transaction. It loads the stored rows, warns about money differences, fills empty contact fields with `UPDATE ... WHERE id=:id AND <field> IS NULL`, writes the audit row only when that UPDATE changed a row, and records warnings. **Change later:** easy.
+- **Fill race:** the loser of a race gets 0 rows from its UPDATE, re-reads the stored value and records `contact_changed_after_sync` only if it differs from what it wanted to write (test: 8 threads, different values: 1 audit row, 7 warnings; same values: 1 audit row, 0 warnings).
+- **Name:** filling `donor_name` sets `is_anonymous = false` in the same UPDATE (the CHECK `is_anonymous = (donor_name IS NULL)` would reject a two-step update).
+
+## V2-2. Warning details never hold contact values
+- `sync_issues.detail` for contact warnings holds the field name and a 16-hex-digit digest of the new value (so one distinct value is recorded once, not on every run), never the email/name/address. Money warnings hold the money values (not personal). `donation_contact_changes` has no value column by design.
+
+## V2-3. A read whose money differs is not used to fill contacts (ASSUMPTION)
+- **Context:** the spec lets a later read of "the same donation" fill empty contact fields. If a sheet row keeps its `Entry ID` but its amount/currency/date differ, it may be a different donation that reuses the ID; copying its donor email onto the stored donation could attach the wrong person.
+- **Choice:** when amount, currency or `donated_at` differ from the stored row, record the `changed_after_sync` warning and fill nothing. **Why:** wrong donor data is worse than a follow-up item. **Change later:** delete the `continue` in `apply_reads` (one line; a test covers the current behaviour).
+
+## V2-4. Money differences: Stripe by column, sheet by cell text
+- Stripe duplicates/reconciliation compare parsed `amount_minor`, `currency`, `donated_at` with the stored columns. The sheet keeps its v1 comparison of the raw cell text (entry id, date, amount, currency), so a reformatted amount (`10` -> `10.00`) is still reported, and the v1 warning shape is unchanged. Contact cells are excluded from that text comparison and compared with the **columns** instead, because rows stored by version 1 have no `donor_email` key in `raw_payload` (a raw-text diff would raise a false warning for every old row after the upgrade; test: `test_version_2_sync_on_an_upgraded_version_1_database...`).
+- `raw_payload` is never modified (it is the original input); filled values live only in the columns.
+
+## V2-5. Contact information never blocks a donation; where that meets the Strictness rule (ASSUMPTION)
+- **Contact problems that no longer quarantine a sheet row:** missing/malformed email (stored NULL + `invalid_email`), over-long donor name / address / recipient (cut to 500/2000/500 characters, `rstrip`ped, plus a `contact_truncated` warning; the full text stays in `raw_payload`). A truncated value is deterministic, so a re-read compares equal and fills/warnings do not flap.
+- **Conflict in the spec:** section 2.3 "Strictness" says NUL characters and undecodable bytes are quarantined; section 2.3 "Donor email" says contact problems never quarantine. **Resolution:** the **Donor Email cell is exempt** from the NUL / undecodable-byte checks (a bad byte there gives `invalid_email`, never a quarantine); NUL or undecodable bytes in any other cell (including name/address/recipient) still quarantine the row, because they indicate a wrongly encoded file, and a re-export in the right encoding would otherwise insert the donation twice. This is the narrowest reading that satisfies both sentences. **Flagged in BLOCKERS.md as an assumption.**
+- Entry ID, date, amount, currency problems quarantine exactly as before.
+
+## V2-6. Email validation details
+- Trim, `lower()`, max 254 characters (checked after trimming), exactly one `@`, non-empty local part, domain with a dot that does not start/end with a dot or contain `..`, no whitespace / control / format characters, no U+FFFD. These last few go slightly beyond the spec's "simple check" but only reject text that cannot be an address. Non-string values (a number in `receipt_email`) count as malformed. A blank or whitespace-only value is "missing", not "invalid".
+- **Stripe order:** `receipt_email`, then `metadata.donor_email`. The first *valid* candidate wins, so a malformed `receipt_email` does not hide a valid metadata email; if none is valid and one was non-blank, `invalid_email` is recorded.
+- `invalid_email` is recorded on every read that sees a malformed value (de-duplicated by digest), also for donations that already have an email; the follow-up list only looks at donations with a NULL email.
+
+## V2-7. Stripe donor details (SPEC 2.3)
+- Name = `metadata.donor_name`; email = `receipt_email`, else `metadata.donor_email`. Removed: `latest_charge.billing_details`, legacy `charges.data[0]`, `shipping.name`, `metadata.name/email`. The real Stripe listing client no longer asks for `expand=data.latest_charge`. Reading the Charge's billing details is a possible future extension (needs one more API call per payment or an expanded event).
+- Stripe donations never carry an address or recipient.
+- A name longer than 500 characters is cut and flagged like the sheet's.
+
+## V2-8. The money trigger and what it does not do
+- Migration `0002` adds `donations_reject_money_update()` (BEFORE UPDATE, per row): any UPDATE that changes `amount_minor`, `currency`, `donated_at`, `source` or `external_id` raises (`check_violation`, message "money fields of donations are immutable"). Setting a column to its current value is allowed. Tests update each column through plain SQL and through a second session.
+- **Not blocked:** DELETE, TRUNCATE, `id`, `created_at`, `raw_payload`, and contact columns. Contact immutability beyond fill-once is application-level only, on purpose: a human who must correct a wrong email can do it with an ordinary UPDATE after reading the `contact_changed_after_sync` warning. A table owner can drop the trigger; that is a deliberate act, not a code bug. **Change later:** add a contact trigger if the volunteer wants it enforced there too.
+
+## V2-9. Migration 0002 and existing data
+- The initial migration is untouched. `0002` adds the `donation_contact_changes` table, `sync_runs.contacts_filled` (default 0) and the trigger; it does not rewrite any existing row. `donations.donor_email` already existed (NULL) in `0001`, so v1 rows simply keep NULL and appear in `/followups` as `missing_email` until a later read fills them. Downgrade removes the trigger, table and column.
+- Test database: tests upgrade a scratch database created at revision `0001` and populated with rows, then compare every `donations` row before and after (needs a PostgreSQL role that may `CREATE DATABASE`, as the docker-compose/CI `ledger` user is).
+
+## V2-10. `GET /followups`
+- Same auth and keyset pagination as `/donations` (`limit` 1-200, `before_id`, newest first, optional `source`). Items: `donation_id, source, external_id, date, reason`; nothing else. `reason` is `invalid_email` when an `invalid_email` warning exists for that donation, otherwise `missing_email`. The `date` is the donation time (`donated_at`).
+
+## V2-11. `sync_runs.contacts_filled`
+- New counter (also in `GET /sync-runs`) so an operator sees at a glance how many fills a run made. Added in the same transaction as the batch like the other counters.
+
+## V2-12. Existing tests that had to change (each one recorded; no assertion weakened beyond the spec change)
+| Test | Change | Reason |
+|---|---|---|
+| `tests/test_sync.py` `HEADER`, `good()`, and literal rows in `test_sync.py`, `test_adversarial.py` | 8 columns: an empty `Donor Email` cell inserted after `Donor Name` | sheet now has eight columns |
+| `test_sample_csv_inserts_good_rows...` | expects the new sample (16 rows read, 7 inserted, 9 quarantined; S-015 added), adds asserts on emails and `invalid_email` warnings | sample CSV has an email column and one more good row |
+| `test_rerunning_the_same_sheet...` | 7 duplicates instead of 6; adds `issues_recorded == 0` | same |
+| `test_header_matching_ignores_case_spacing_bom_and_column_order` | header and row gain a `Donor Email` column; asserts the email | header must contain all eight columns |
+| `test_very_long_values_are_quarantined_or_stored_without_error` (renamed `test_over_long_contact_text_is_truncated_and_over_long_ids_are_quarantined`) | the 100,000-character *name* is now stored cut to 500 characters instead of quarantined; the over-long Entry ID is still quarantined | contact info never blocks a donation (V2-5) |
+| `test_csv_with_a_bad_byte_and_an_oversized_cell_still_syncs_the_other_rows` | oversized name row C2 is stored (cut, with a `contact_truncated` warning) instead of quarantined; the undecodable-byte row C1 is still quarantined | same |
+| `test_duplicate_extra_header_names_keep_both_columns` | second duplicate extra header is `Note_10` instead of `Note_9` | the extra column moved one position right |
+| `test_sync_runs_endpoint...` | 7 inserted instead of 6 | new sample row |
+| `test_name_and_email_are_read_from_charge_billing_details` (renamed `..._from_metadata_by_the_webhook_end_to_end`), the anonymous-name test in `test_adversarial.py`, the PII-log test in `test_api.py` | donor name now comes from `metadata.donor_name` | Stripe donor details rule (billing details out of scope) |
+| `test_migration_creates_the_four_required_tables` (renamed ...`all_five...`) | also expects `donation_contact_changes` | new table |
+| `tests/conftest.py` | TRUNCATE list includes `donation_contact_changes` | new table |
+`tests/test_parsing.py::test_overlong_names_are_rejected` is unchanged: `normalize_donor_name` still raises; the sheet code cuts the text first.
+
+## V2-13. New dependencies
+- None.
+
+## V2-14. Break-it harness in the repository
+- `scripts/break_it.py` applies each mutation listed in it (weaken one safety property), runs the whole suite, restores the file, and reports whether a test failed. It is a developer tool, not part of CI (it takes several minutes and rewrites source files while it runs).
