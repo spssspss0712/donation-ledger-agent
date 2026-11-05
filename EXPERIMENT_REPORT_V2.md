@@ -7,12 +7,12 @@ The version 1 report (`EXPERIMENT_REPORT.md`) is unchanged and still describes t
 | Item | Value |
 |---|---|
 | First / last commit | 2026-11-05 01:44 UTC (PLAN_V2.md) / 02:30 UTC (review round 3), plus the final report commit; wall-clock stayed within the 3-hour budget. A container restart killed review round 4 once; it was re-run. |
-| Tests | 353, all passing on PostgreSQL 16 (Python 3.13 locally; CI pins 3.12). v1 started at 226. ruff, ruff format, mypy --strict clean. |
-| Adversarial rounds | 4 independent-reviewer rounds (subagent seeing only SPEC.md + code) plus my own break-it runs. Round 1: 3 real findings fixed. Round 2: 2 real findings fixed. Round 3: 1 cosmetic finding accepted + 1 missing test added. Round 4: nothing new. |
-| "Two consecutive rounds with nothing new" | **Not strictly met.** Round 3 produced one new (cosmetic, accepted, documented) finding and one test gap; round 4 found nothing. A fifth round was not run. |
+| Tests | 380, all passing on PostgreSQL 16 (Python 3.13 locally; CI pins 3.12). v1 started at 226. ruff, ruff format, mypy --strict clean. (353 at the end of the first session; 27 added in the follow-up session.) |
+| Adversarial rounds | 6 independent-reviewer rounds (a fresh subagent seeing only SPEC.md + code each time) plus my own break-it runs. Round 1: 3 real findings fixed. Round 2: 2 fixed. Round 3: 1 cosmetic accepted + 1 missing test. **Round 4: nothing new.** Round 5 (after the currency change): 1 real gap fixed (old Stripe quarantines were never re-driven) + 2 weak tests strengthened. Round 6: 1 low-severity bug fixed (stale quarantine beside an existing donation) + 1 test gap closed. |
+| "Two consecutive rounds with nothing new" | **Not met.** Only round 4 was clean; rounds 5 and 6 each found something real (fixed and tested). At least two further clean rounds are still needed. |
 | Human interventions | 0 (no question was asked; assumptions are in BLOCKERS.md) |
 | CI | The workflow file is unchanged from v1 (PostgreSQL service, ruff, mypy, pytest, migration, demo, pip-audit). It was **not run on GitHub in this session** (no GitHub Actions access); the same commands were run locally. |
-| Cold start | A fresh clone of agent/v2 (commit 5e74c04), `python -m venv`, `make install`, `make check` (353 passed), `make demo` (all 7 steps) worked using a local PostgreSQL with the three databases from the README. |
+| Cold start | A fresh clone of agent/v2 (commit 5e74c04, **before** the follow-up session; not repeated afterwards), `python -m venv`, `make install`, `make check` (353 passed), `make demo` (all 7 steps) worked using a local PostgreSQL with the three databases from the README. |
 
 ## 2. Verification status of every feature
 
@@ -52,7 +52,7 @@ The version 1 report (`EXPERIMENT_REPORT.md`) is unchanged and still describes t
 | Review 4 | Nothing new | - |
 
 ### Break-it table (scripts/break_it.py; each mutation applied alone, whole suite run, file restored)
-All 32 mutations are caught by at least one test. Examples (failing tests in parentheses at the time of the run):
+**Real numbers.** `scripts/break_it.py` now contains **43** mutations. The first session's report said 32, which was the count at that time; the script grew to 43 (new currency, email, re-drive, lock and timezone mutations). One of the original 32, `stripe_ignores_metadata_email_fallback`, became stale after review round 2 changed the code it targeted and was not applied in later runs because I had not re-run the script; this is fixed (see below). Final complete run, one invocation, unmutated baseline green first: **43/43 mutations caught, 0 survivors, tree restored (clean `git status`)**. Examples from the first session's table:
 
 | Property broken | Caught by |
 |---|---|
@@ -71,7 +71,7 @@ All 32 mutations are caught by at least one test. Examples (failing tests in par
 | Webhook duplicate / reconcile do not fill | webhook and reconcile tests |
 | v1: unique constraint removed, signature not verified, float amounts, timezone ignored, sync lock not taken | 40 / 6 / 4 / 6 / 2 failing tests |
 
-Two mutations were first reported "not caught" (an equivalent mutant protected by a second guard; a mutation that pydantic ignored). They were rewritten as real mutations and are caught. Round 4's reviewer ran 32 independent mutations of its own: 29 caught, 3 equivalent.
+The harness fix (follow-up 3): before running anything it checks that every mutation's target text (and each extra edit) matches the code exactly once; otherwise it prints the stale names and **exits 2 without running**; `tests/test_break_it_script.py` makes the same check part of every test run. It also requires a green unmutated baseline, counts a pytest crash as caught, and excludes its own test from mutation runs (that test legitimately fails under any mutation; the first attempt at the full run was aborted for this reason and restarted). Two mutations were first reported "not caught" (an equivalent mutant protected by a second guard; a mutation that pydantic ignored). They were rewritten as real mutations and are caught. Reviewers also ran their own mutations in scratch copies: round 4: 32 (29 caught, 3 equivalent); round 5: a set whose survivors showed two weak tests (fixed); round 6: 42 (36 caught, 4 survivors: 2 real test gaps now closed, 1 mutant with a bad pattern, 1 equivalent).
 
 ## 4. Assumptions and unclear requirements
 See BLOCKERS.md (V2 assumptions) and DECISIONS.md (V2-1 ... V2-17). The ones that matter most:
@@ -84,8 +84,9 @@ See BLOCKERS.md (V2 assumptions) and DECISIONS.md (V2-1 ... V2-17). The ones tha
 ## 5. What was not finished and why
 - Phase B (real Stripe test mode, real Google Sheet) and Phase C (Render): no credentials, out of scope for this task.
 - GitHub Actions has not been observed green for these commits.
-- A fifth review round (to satisfy "two consecutive clean rounds" strictly).
-- `make demo` imports the signer from `tests/helpers.py`, so it needs a checkout that includes `tests/`.
+- Two consecutive clean review rounds (see summary; rounds 5 and 6 each found something).
+- Cold start was not repeated after the follow-up session's code changes (the test suite, lint, mypy and a demo run from a copy of the repository without `tests/` were).
+- Stripe payments are still quarantined for an implausible `created`, an amount of 0 or above 10^15, or a missing `created` (the spec only exempts currency). Re-drive of Stripe quarantines happens only inside reconcile runs and skips ones a human marked `ignored`.
 - Google reader: padding of short rows (which removes truncated-row detection for Google), no timeout beyond the one set in code, and everything else untested.
 
 ## 6. If I did it again, which parts of the specification should be clearer
@@ -95,3 +96,14 @@ See BLOCKERS.md (V2 assumptions) and DECISIONS.md (V2-1 ... V2-17). The ones tha
 - Say whether warnings may contain digests of contact values.
 - Define "date" in the follow-up list (donation date vs. date noticed).
 - Say how `donation_contact_changes` should behave when a fill happens outside any run (null run id is assumed).
+
+## 7. Follow-up session (spec change and fixes)
+
+| Item | What changed | How it was verified |
+|---|---|---|
+| 1. Stripe currency | SPEC.md section 2.3 "Currency" row updated. Stripe: any three ASCII letters, uppercased, never quarantined for currency (`xyz`, `qqq`, `zzz`, `hrk`, ... are stored). Sheet keeps the ISO 4217 whitelist. Non-code values (wrong length, digits, non-ASCII, not text) are still quarantined: the DB CHECK cannot store them. DECISIONS V2-18 | Automated tests for mapper, webhook and reconcile; one existing test changed because the spec changed (recorded); mutations `stripe_currency_whitelist_restored`, `stripe_currency_accepts_non_letters`, `sheet_currency_whitelist_removed` are caught |
+| 2. Review rounds | Round 5 and 6 (above). Fixes: reconcile re-drives open Stripe quarantines (so the currency change reaches payments quarantined by v1) and closes stale ones beside an existing donation; tests for warning rollback at the end of a batch, default `SHEET_TIMEZONE`, and the per-payment locks in reconcile | Automated tests; mutations added for each |
+| 3. break_it.py | Stale-mutation check (exit 2), refreshed mutation, 43 mutations | Full run: 43/43 caught |
+| 4. Report + demo | Mutation count corrected (above). `make demo` no longer needs `tests/`: signing helper moved to `donation_ledger/stripe_signing.py`; `tests/helpers.py` keeps an independent copy | `tests/test_demo_independence.py` (signers equal and accepted by the Stripe SDK; no `tests` import inside the package; demo runs in a copy of the repository without `tests/`) |
+
+Not verified in a real environment (unchanged): real Stripe, real Google Sheets, Render, GitHub Actions.
