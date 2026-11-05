@@ -11,13 +11,13 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from sqlalchemy import Engine, select, text
+from sqlalchemy import Engine, exists, select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from donation_ledger.config import Settings
 from donation_ledger.db import make_session_factory
-from donation_ledger.models import Donation, SyncRun
+from donation_ledger.models import Donation, SyncIssue, SyncRun
 from donation_ledger.runs import safe_error_message
 from donation_ledger.webhook import SignatureError, process_event, verify_and_parse
 
@@ -43,6 +43,21 @@ class DonationOut(BaseModel):
 
 class DonationPage(BaseModel):
     items: list[DonationOut]
+    next_before_id: int | None
+
+
+class FollowupOut(BaseModel):
+    """A donation that has no usable email. Deliberately carries no contact data at all."""
+
+    donation_id: int
+    source: str
+    external_id: str
+    date: datetime
+    reason: Literal["missing_email", "invalid_email"]
+
+
+class FollowupPage(BaseModel):
+    items: list[FollowupOut]
     next_before_id: int | None
 
 
@@ -141,6 +156,45 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
         items = [_donation_out(d) for d in page]
         more = len(rows) > limit
         return DonationPage(items=items, next_before_id=page[-1].id if more else None)
+
+    @app.get("/followups", response_model=FollowupPage, dependencies=[Depends(require_token)])
+    def list_followups(
+        source: Literal["stripe", "sheet"] | None = None,
+        limit: Annotated[int, Query(ge=1, le=200)] = 50,
+        before_id: Annotated[int | None, Query(ge=1, le=2**63 - 1)] = None,
+    ) -> FollowupPage:
+        # A malformed email leaves an invalid_email warning behind; otherwise it was just missing.
+        had_invalid = exists().where(
+            SyncIssue.source == Donation.source,
+            SyncIssue.external_id == Donation.external_id,
+            SyncIssue.kind == "invalid_email",
+        )
+        stmt = (
+            select(
+                Donation.id, Donation.source, Donation.external_id, Donation.donated_at, had_invalid
+            )
+            .where(Donation.donor_email.is_(None))
+            .order_by(Donation.id.desc())
+            .limit(limit + 1)
+        )
+        if source is not None:
+            stmt = stmt.where(Donation.source == source)
+        if before_id is not None:
+            stmt = stmt.where(Donation.id < before_id)
+        with get_session() as session:
+            found = list(session.execute(stmt))
+        page = found[:limit]
+        items = [
+            FollowupOut(
+                donation_id=r[0],
+                source=r[1],
+                external_id=r[2],
+                date=r[3],
+                reason="invalid_email" if r[4] else "missing_email",
+            )
+            for r in page
+        ]
+        return FollowupPage(items=items, next_before_id=page[-1][0] if len(found) > limit else None)
 
     @app.get("/sync-runs", response_model=list[SyncRunOut], dependencies=[Depends(require_token)])
     def list_sync_runs(
