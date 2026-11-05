@@ -200,6 +200,30 @@ MUTATIONS = [
         '    sheet_timezone: str = "UTC"',
     ),
     Mutation(
+        "reconcile_listing_without_per_payment_lock",
+        "donation_ledger/reconcile.py",
+        "    lock_external_ids(session, SOURCE_STRIPE, [m.external_id for m in mapped_all])",
+        "    pass",
+    ),
+    Mutation(
+        "redrive_without_per_payment_lock",
+        "donation_ledger/reconcile.py",
+        "    lock_external_ids(session, SOURCE_STRIPE, [d.external_id for d in ready])",
+        "    pass",
+    ),
+    Mutation(
+        "redrive_keeps_stale_quarantine_beside_existing_donation",
+        "donation_ledger/reconcile.py",
+        "    resolve_rejections_for(session, SOURCE_STRIPE, held)",
+        "    pass",
+    ),
+    Mutation(
+        "email_with_inner_whitespace_accepted",
+        "donation_ledger/parsing.py",
+        '        ch.isspace() or unicodedata.category(ch) in ("Cc", "Cf", "Cs") for ch in email',
+        '        unicodedata.category(ch) in ("Cc", "Cf", "Cs") for ch in email',
+    ),
+    Mutation(
         "sheet_currency_whitelist_removed",
         "donation_ledger/parsing.py",
         "    if not raw.isascii() or code not in ISO_4217:",

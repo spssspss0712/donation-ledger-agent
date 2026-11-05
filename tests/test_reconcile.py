@@ -263,3 +263,68 @@ def test_redrive_never_touches_ignored_or_sheet_rejections(engine: Engine) -> No
         "ignored",
         "open",
     ]
+
+
+def test_redrive_resolves_a_stale_open_quarantine_whose_donation_already_exists_without_a_warning(
+    engine: Engine, session_factory: sessionmaker[Session]
+) -> None:
+    process_event(session_factory, event(payment_intent("pi_BOTHWAYS", currency="eur")))
+    stale = payment_intent("pi_BOTHWAYS", currency="xyz")  # an older snapshot of the same payment
+    quarantine_like_v1(engine, stale, "invalid_currency: missing or not a 3-letter code")
+    res = reconcile(engine, FakeStripe([]))
+    assert res.status == "succeeded" and res.counters.rows_inserted == 0
+    assert rows(engine, "SELECT status FROM rejected_rows") == [("resolved",)]
+    assert rows(engine, "SELECT currency FROM donations") == [("EUR",)]
+    assert rows(engine, "SELECT count(*) FROM sync_issues") == [(0,)]
+    again = reconcile(engine, FakeStripe([]))
+    assert again.counters.rows_read == 0  # nothing is open any more, nothing is re-read
+
+
+def _holds_payment_lock(engine: Engine, external_id: str) -> Any:
+    """Hold the per-payment advisory lock in another transaction, like a webhook would."""
+    conn = engine.connect()
+    conn.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:k, 0))"),
+        {"k": f"stripe:{external_id}"},
+    )
+    return conn
+
+
+def _blocked_until_released(engine: Engine, run: Any, holder: Any) -> None:
+    import threading
+    import time
+
+    done = threading.Event()
+
+    def target() -> None:
+        run()
+        done.set()
+
+    thread = threading.Thread(target=target)
+    thread.start()
+    time.sleep(1.0)
+    still_waiting = not done.is_set()
+    holder.rollback()  # releases the advisory lock
+    holder.close()
+    thread.join(timeout=20)
+    assert still_waiting, "the job did not wait for the per-payment lock"
+    assert done.is_set()
+
+
+def test_reconciliation_waits_for_the_per_payment_lock_before_writing_a_listed_payment(
+    engine: Engine,
+) -> None:
+    holder = _holds_payment_lock(engine, "pi_LOCKED1")
+    _blocked_until_released(
+        engine, lambda: reconcile(engine, FakeStripe([payment_intent("pi_LOCKED1")])), holder
+    )
+    assert rows(engine, "SELECT external_id FROM donations") == [("pi_LOCKED1",)]
+
+
+def test_redrive_waits_for_the_per_payment_lock_before_writing_a_quarantined_payment(
+    engine: Engine,
+) -> None:
+    quarantine_like_v1(engine, payment_intent("pi_LOCKED2", currency="xyz"), "invalid_currency")
+    holder = _holds_payment_lock(engine, "pi_LOCKED2")
+    _blocked_until_released(engine, lambda: reconcile(engine, FakeStripe([])), holder)
+    assert rows(engine, "SELECT external_id FROM donations") == [("pi_LOCKED2",)]

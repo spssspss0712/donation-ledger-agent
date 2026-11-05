@@ -25,6 +25,7 @@ from donation_ledger.ledger import (
     insert_donations,
     lock_external_ids,
     record_rejection,
+    resolve_rejections_for,
 )
 from donation_ledger.logging_setup import configure_logging
 from donation_ledger.models import RUN_STRIPE_RECONCILE, SOURCE_STRIPE, RejectedRow
@@ -164,6 +165,12 @@ def _redrive(session: Session, stored: Sequence[Mapping[str, Any]], run_id: int)
     c = Counters(rows_read=len(stored))
     ready = [m for m in (map_payment_intent(raw) for raw in stored) if isinstance(m, NewDonation)]
     lock_external_ids(session, SOURCE_STRIPE, [d.external_id for d in ready])
+    # A donation may already exist beside the stale rejection (the old quarantine-versus-insert
+    # race). The donation wins: close the rejection, and do not compare an old snapshot with it.
+    held = {d.external_id for d in ready if donation_exists(session, d.external_id)}
+    resolve_rejections_for(session, SOURCE_STRIPE, held)
+    c.rows_duplicate_skipped += len(held)
+    ready = [d for d in ready if d.external_id not in held]
     inserted = insert_donations(session, ready)
     outcome = apply_reads(session, ready, inserted, run_id)
     c.rows_inserted += len(inserted)
