@@ -23,6 +23,7 @@ class Mutation:
     path: str
     old: str
     new: str
+    extra: tuple[tuple[str, str], ...] = ()  # more (old, new) edits in the same file
 
 
 MUTATIONS = [
@@ -59,6 +60,12 @@ MUTATIONS = [
         "donation_ledger/contacts.py",
         "    if current is None:\n        if _fill(",
         "    if True:\n        if _fill(",
+        extra=(
+            (
+                ".where(Donation.id == row.id, getattr(Donation, field).is_(None))",
+                ".where(Donation.id == row.id)",
+            ),
+        ),
     ),
     Mutation(
         "fill_once_blank_read_not_ignored",
@@ -159,8 +166,8 @@ MUTATIONS = [
     Mutation(
         "followups_leaks_email",
         "donation_ledger/api.py",
-        '                reason="invalid_email" if r[4] else "missing_email",',
-        '                reason="invalid_email" if r[4] else "missing_email",\n                email="leak",',
+        '    reason: Literal["missing_email", "invalid_email"]\n',
+        '    reason: Literal["missing_email", "invalid_email"]\n    email: str = "leak"\n',
     ),
     Mutation(
         "followups_lists_donations_that_have_an_email",
@@ -247,7 +254,10 @@ def main(argv: list[str]) -> int:
             missed += 1
             continue
         try:
-            path.write_text(original.replace(m.old, m.new), encoding="utf-8")
+            mutated = original.replace(m.old, m.new)
+            for old, new in m.extra:
+                mutated = mutated.replace(old, new)
+            path.write_text(mutated, encoding="utf-8")
             failed = run_tests()
         finally:
             path.write_text(original, encoding="utf-8")
