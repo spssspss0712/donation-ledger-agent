@@ -79,6 +79,7 @@ class SyncRun(Base):
     rows_quarantined: Mapped[int] = mapped_column(Integer, server_default="0")
     rows_ignored: Mapped[int] = mapped_column(Integer, server_default="0")
     issues_recorded: Mapped[int] = mapped_column(Integer, server_default="0")
+    contacts_filled: Mapped[int] = mapped_column(Integer, server_default="0")
     error_message: Mapped[str | None] = mapped_column(Text)
 
 
@@ -132,3 +133,30 @@ class SyncIssue(Base):
         BigInteger, ForeignKey("sync_runs.id", ondelete="SET NULL")
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+CONTACT_FIELDS = ("donor_name", "donor_email", "donor_address", "recipient")
+# Immutable in the database by trigger (migration 0002) and never written by application code.
+MONEY_FIELDS = ("amount_minor", "currency", "donated_at", "source", "external_id")
+
+
+class DonationContactChange(Base):
+    """Audit of fill-once contact updates. The new value is deliberately NOT stored here."""
+
+    __tablename__ = "donation_contact_changes"
+    __table_args__ = (
+        CheckConstraint(
+            "field_name IN ('donor_name', 'donor_email', 'donor_address', 'recipient')",
+            name="ck_contact_changes_field",
+        ),
+        Index("ix_contact_changes_donation_id", "donation_id"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    donation_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("donations.id"))
+    field_name: Mapped[str] = mapped_column(String(32))
+    source: Mapped[str] = mapped_column(String(16))
+    sync_run_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("sync_runs.id", ondelete="SET NULL")
+    )
+    changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

@@ -44,7 +44,8 @@ def clean_db(engine: Engine) -> Iterator[None]:
     with engine.begin() as conn:
         conn.execute(
             text(
-                "TRUNCATE donations, rejected_rows, sync_issues, sync_runs RESTART IDENTITY CASCADE"
+                "TRUNCATE donations, donation_contact_changes, rejected_rows, sync_issues, "
+                "sync_runs RESTART IDENTITY CASCADE"
             )
         )
     yield
