@@ -79,20 +79,37 @@ def test_stripe_donations_never_carry_an_address_or_recipient() -> None:
     assert (d.donor_address, d.recipient) == (None, None)
 
 
-@pytest.mark.parametrize("code", ["xcg", "std", "zwg", "XCG", "ANG"])
-def test_any_three_letter_stripe_currency_is_stored_because_the_ledger_must_match_stripe(
+@pytest.mark.parametrize(
+    "code", ["xcg", "std", "zwg", "XCG", "ANG", "xyz", "ZZZ", "qqq", " eur ", "hrk", "cuc", "AbC"]
+)
+def test_any_three_letter_stripe_currency_is_stored_uppercase_even_if_not_an_iso_code(
     code: str,
 ) -> None:
-    assert mapped(currency=code).currency == code.upper()
+    from donation_ledger.parsing import ISO_4217
+
+    assert mapped(currency=code).currency == code.strip().upper()
+    assert "XYZ" not in ISO_4217 and "QQQ" not in ISO_4217  # the examples really are unlisted
 
 
-@pytest.mark.parametrize("code", ["us", "usdd", "u$d", "", None, 5])
-def test_a_stripe_currency_that_is_not_three_ascii_letters_is_still_quarantined(
+@pytest.mark.parametrize(
+    "code", ["us", "usdd", "u$d", "u1d", "", "  ", None, 5, "\u01c5xy", "\u0131nr"]
+)
+def test_a_stripe_currency_that_cannot_be_a_three_letter_ascii_code_is_still_quarantined(
     code: Any,
 ) -> None:
     from donation_ledger.ledger import Rejection
 
-    assert isinstance(map_payment_intent(payment_intent(currency=code)), Rejection)
+    result = map_payment_intent(payment_intent(currency=code))
+    assert isinstance(result, Rejection) and result.reason.startswith("invalid_currency")
+
+
+def test_the_iso_whitelist_still_applies_to_sheet_currencies_where_typos_are_plausible() -> None:
+    from donation_ledger.parsing import RowError, normalize_currency
+
+    assert normalize_currency("xcg") == "XCG"
+    for typo in ("XYZ", "UDS", "EUROS"):
+        with pytest.raises(RowError):
+            normalize_currency(typo)
 
 
 @pytest.mark.parametrize("bad", ["a\x00@b.com", "a\ud800@b.com", "a​@b.com"])

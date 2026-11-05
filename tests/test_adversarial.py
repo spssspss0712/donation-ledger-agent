@@ -229,7 +229,7 @@ def test_oversized_batch_size_is_refused_at_configuration_time() -> None:
         Settings.from_env({"DATABASE_URL": "postgresql://h/d", "SYNC_BATCH_SIZE": "7000"})
 
 
-def test_stripe_payload_never_stores_the_word_anonymous_and_unknown_currency_is_quarantined(
+def test_stripe_payload_never_stores_the_word_anonymous_and_an_unlisted_currency_is_still_stored(
     engine: Engine, settings: Settings
 ) -> None:
     client = TestClient(create_app(settings, engine), raise_server_exceptions=False)
@@ -240,8 +240,14 @@ def test_stripe_payload_never_stores_the_word_anonymous_and_unknown_currency_is_
         assert client.post("/webhooks/stripe", content=body, headers=hdr).status_code == 200
     assert rows(
         engine, "SELECT is_anonymous, raw_payload::text ILIKE '%anonymous%' FROM donations"
-    ) == [(True, False)]
-    assert rows(engine, "SELECT external_id FROM rejected_rows") == [("pi_XYZ",)]
+    ) == [(True, False), (True, False)]
+    # SPEC v2 (follow-up 1): a Stripe payment is never quarantined for its currency, even a
+    # code that is not in the ISO list, because the money has already been received.
+    assert rows(engine, "SELECT external_id, currency FROM donations ORDER BY id") == [
+        ("pi_FAKE0001", "USD"),
+        ("pi_XYZ", "XYZ"),
+    ]
+    assert rows(engine, "SELECT count(*) FROM rejected_rows") == [(0,)]
 
 
 def test_chunked_oversized_body_without_content_length_is_refused(

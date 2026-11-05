@@ -18,7 +18,6 @@ from donation_ledger.ledger import NewDonation, Rejection, fingerprint_of
 from donation_ledger.models import SOURCE_STRIPE
 from donation_ledger.parsing import (
     FUTURE_SLACK,
-    ISO_4217,
     MAX_AMOUNT_MINOR,
     MAX_NAME_LEN,
     MIN_DATE,
@@ -98,9 +97,18 @@ def map_payment_intent(pi: Mapping[str, Any]) -> NewDonation | Rejection:
 
 
 def _currency(value: Any) -> str:
+    """Any three ASCII letters, uppercased; NO ISO 4217 whitelist for Stripe.
+
+    The payment has already been received, so the ledger must match Stripe even for a code
+    this project has never heard of. The whitelist still guards the Google Sheet, where a
+    typo is plausible (``parsing.normalize_currency``). Only something that cannot be a code
+    at all (wrong length, digits, non-ASCII letters, not text) is quarantined; the database
+    CHECK ``^[A-Z]{3}$`` could not store it anyway.
+    """
     code = value.strip() if isinstance(value, str) else ""
-    # isascii: str.isalpha() accepts letters like "ǅ" that the DB CHECK would then reject.
-    if code.upper() not in ISO_4217 or not code.isascii():
+    # isascii: str.isalpha() accepts letters like "ǅ" that the DB CHECK would then reject, and
+    # "ı".upper() == "I" must not turn a non-ASCII input into a different code.
+    if len(code) != 3 or not code.isascii() or not code.isalpha():
         raise RowError("invalid_currency: missing or not a 3-letter code")
     return code.upper()
 

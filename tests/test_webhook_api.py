@@ -394,3 +394,14 @@ def test_failure_while_writing_the_audit_row_returns_5xx_and_rolls_back_the_whol
             conn.execute(text("SELECT donor_email FROM donations")).scalar_one()
             == "late@example.org"
         )
+
+
+def test_webhook_stores_a_payment_in_a_currency_outside_the_iso_list_and_never_quarantines_it(
+    client: TestClient, engine: Engine
+) -> None:
+    resp = deliver(client, payment_intent("pi_ODD", currency="xyz", amount=777))
+    assert resp.status_code == 200 and resp.json() == {"status": "created"}
+    with engine.connect() as conn:
+        row = conn.execute(text("SELECT currency, amount_minor FROM donations")).one()
+        assert conn.execute(text("SELECT count(*) FROM rejected_rows")).scalar_one() == 0
+    assert tuple(row) == ("XYZ", 777)

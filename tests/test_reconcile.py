@@ -189,3 +189,11 @@ def test_reconciliation_batch_with_a_failure_after_a_fill_rolls_the_fill_back(
     # pi_NEW1 was in the same batch as the failed fill, so it must not exist either.
     assert rows(engine, "SELECT external_id, donor_email FROM donations") == [("pi_ATOMIC", None)]
     assert rows(engine, "SELECT count(*) FROM sync_issues") == [(0,)]
+
+
+def test_reconciliation_stores_a_payment_whose_currency_is_not_in_the_iso_list(
+    engine: Engine,
+) -> None:
+    res = reconcile(engine, FakeStripe([payment_intent("pi_ODD2", currency="qqq")]))
+    assert res.counters.rows_inserted == 1 and res.counters.rows_quarantined == 0
+    assert rows(engine, "SELECT currency FROM donations") == [("QQQ",)]
