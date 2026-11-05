@@ -37,9 +37,17 @@ ZERO_DECIMAL = frozenset(
 )
 THREE_DECIMAL = frozenset(["BHD", "IQD", "JOD", "KWD", "LYD", "OMR", "TND"])
 
-# Active ISO 4217 alphabetic codes. Unknown codes are quarantined, not guessed.
+# ISO 4217 alphabetic codes. Unknown codes are quarantined, not guessed. Besides the active
+# codes it keeps recently retired/introduced ones (SLL, STD, MRO, BYR, XCG, ZWG) because
+# Stripe can still report them and a real payment must never be dropped for its currency.
 ISO_4217 = frozenset(
     [
+        "SLL",
+        "STD",
+        "MRO",
+        "BYR",
+        "XCG",
+        "ZWG",
         "AED",
         "AFN",
         "ALL",

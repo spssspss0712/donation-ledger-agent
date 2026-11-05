@@ -116,12 +116,12 @@ Everything below is new in version 2 (SPEC.md v2). Decisions D1-D14 above still 
 ## V2-2. Warning details never hold contact values
 - `sync_issues.detail` for contact warnings holds the field name and a 16-hex-digit digest of the new value (so one distinct value is recorded once, not on every run), never the email/name/address. Money warnings hold the money values (not personal). `donation_contact_changes` has no value column by design.
 
-## V2-3. A read whose money differs is not used to fill contacts (ASSUMPTION)
-- **Context:** the spec lets a later read of "the same donation" fill empty contact fields. If a sheet row keeps its `Entry ID` but its amount/currency/date differ, it may be a different donation that reuses the ID; copying its donor email onto the stored donation could attach the wrong person.
-- **Choice:** when amount, currency or `donated_at` differ from the stored row, record the `changed_after_sync` warning and fill nothing. **Why:** wrong donor data is worse than a follow-up item. **Change later:** delete the `continue` in `apply_reads` (one line; a test covers the current behaviour).
+## V2-3. A read whose money differs still fills empty contact fields (changed after review round 1)
+- **History:** the first implementation refused to fill contacts from a read whose amount/currency/date differed (fear that a reused Entry ID is a different donation). The independent review pointed out that the spec says the Entry ID is stable and unique, so a later read with the same ID *is* the same donation, and that the rule left staff-corrected rows on the follow-up list forever.
+- **Choice:** money differences produce the `changed_after_sync` warning and never change money; contact fields are filled regardless. **Risk accepted:** if someone really reuses an Entry ID for another donor, that donor's empty contact cells could complete the old row; `contact_changed_after_sync`/`changed_after_sync` warnings and the audit table make it visible. Tests: `test_a_row_whose_amount_was_edited_still_fills_contacts_but_never_changes_money`, reconcile equivalent.
 
 ## V2-4. Money differences: Stripe by column, sheet by cell text
-- Stripe duplicates/reconciliation compare parsed `amount_minor`, `currency`, `donated_at` with the stored columns. The sheet keeps its v1 comparison of the raw cell text (entry id, date, amount, currency), so a reformatted amount (`10` -> `10.00`) is still reported, and the v1 warning shape is unchanged. Contact cells are excluded from that text comparison and compared with the **columns** instead, because rows stored by version 1 have no `donor_email` key in `raw_payload` (a raw-text diff would raise a false warning for every old row after the upgrade; test: `test_version_2_sync_on_an_upgraded_version_1_database...`).
+- Stripe and sheet rows are both compared by **parsed value** (`amount_minor`, `currency`, `donated_at`) with the stored columns, so reformatting (`1000` -> `$1,000.00`, `2024-03-01` -> `3/1/2024`) is not a change (review round 1; v1 compared raw text). `changed_fields` therefore now names `amount_minor` / `currency` / `donated_at`. Only a sheet row that no longer parses at all falls back to the v1 raw-text comparison. Contact cells are excluded from that text comparison and compared with the **columns** instead, because rows stored by version 1 have no `donor_email` key in `raw_payload` (a raw-text diff would raise a false warning for every old row after the upgrade; test: `test_version_2_sync_on_an_upgraded_version_1_database...`).
 - `raw_payload` is never modified (it is the original input); filled values live only in the columns.
 
 ## V2-5. Contact information never blocks a donation; where that meets the Strictness rule (ASSUMPTION)
@@ -174,3 +174,8 @@ Everything below is new in version 2 (SPEC.md v2). Decisions D1-D14 above still 
 
 ## V2-14. Break-it harness in the repository
 - `scripts/break_it.py` applies each mutation listed in it (weaken one safety property), runs the whole suite, restores the file, and reports whether a test failed. It is a developer tool, not part of CI (it takes several minutes and rewrites source files while it runs).
+
+## V2-15. Review round 1 outcomes
+- Currency whitelist: `SLL, STD, MRO, BYR, XCG, ZWG` added (Stripe can report them; a payment must not be quarantined for its currency). Still a whitelist: unknown codes such as `XYZ` stay quarantined. Residual risk: a future Stripe currency missing from the list is quarantined (visible in `rejected_rows`) until the list is extended.
+- Not changed: a missing/oversized unsigned request gets 413/503 before the 400 check (nothing is written either way). Contact digests in `sync_issues.detail` are unsalted 16-hex SHA-256 prefixes of values that are stored in plain text in `donations` anyway. The Google reader pads short rows (documented, unverified).
+- `test_stripe_mapping.py` change: `changed_fields` assertion in `test_edit_after_sync_only_records_a_warning...` now expects `["amount_minor"]` instead of `["amount"]` (parsed comparison).

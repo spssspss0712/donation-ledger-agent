@@ -48,14 +48,11 @@ def apply_reads(
     items: Sequence[NewDonation],
     inserted: set[str],
     run_id: int | None,
-    *,
-    check_money: bool = True,
 ) -> ContactOutcome:
     """Apply the policy for ``items`` (all the same source) after ``insert_donations``.
 
     ``inserted`` are the external IDs that this transaction just created; every other item
-    is an existing donation. ``check_money=False`` is for the sheet, which compares the raw
-    cell text itself (so a reformatted amount is still reported).
+    is an existing donation.
     """
     out = ContactOutcome()
     if not items:
@@ -87,12 +84,10 @@ def apply_reads(
         if item.external_id in inserted or row is None:
             continue
         changed_money = _changed_money(item, row)
-        if check_money and changed_money:
-            out.issues += _warn_money(session, item, row, changed_money, run_id)
         if changed_money:
-            # Same ID but different money: possibly a different donation that reuses the ID.
-            # Attaching its contact details to this one could mislabel a donor, so do nothing.
-            continue
+            out.issues += _warn_money(session, item, row, changed_money, run_id)
+        # Same ID means same donation (SPEC 2.3): a money difference is reported above, but it
+        # must not keep an empty contact field from being completed.
         for field in CONTACT_FIELDS:
             _apply_field(session, item, row, field, run_id, out)
     return out

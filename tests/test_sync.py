@@ -196,7 +196,7 @@ def test_edit_after_sync_only_records_a_warning_and_leaves_the_donation_untouche
     res = sync(engine, reader)
     assert rows(engine, "SELECT amount_minor FROM donations") == [(1000,)]
     issues = rows(engine, "SELECT external_id, kind, detail->'changed_fields' FROM sync_issues")
-    assert issues == [("G1", "changed_after_sync", ["amount"])]
+    assert issues == [("G1", "changed_after_sync", ["amount_minor"])]
     assert res.counters.issues_recorded == 1
 
 

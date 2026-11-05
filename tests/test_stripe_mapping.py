@@ -77,3 +77,19 @@ def test_legacy_charges_list_shipping_name_and_other_metadata_keys_are_ignored()
 def test_stripe_donations_never_carry_an_address_or_recipient() -> None:
     d = mapped(receipt_email="a@b.org", metadata={"donor_name": "A"})
     assert (d.donor_address, d.recipient) == (None, None)
+
+
+@pytest.mark.parametrize("code", ["xcg", "std", "zwg", "XCG", "ANG"])
+def test_any_three_letter_stripe_currency_is_stored_because_the_ledger_must_match_stripe(
+    code: str,
+) -> None:
+    assert mapped(currency=code).currency == code.upper()
+
+
+@pytest.mark.parametrize("code", ["us", "usdd", "u$d", "", None, 5])
+def test_a_stripe_currency_that_is_not_three_ascii_letters_is_still_quarantined(
+    code: Any,
+) -> None:
+    from donation_ledger.ledger import Rejection
+
+    assert isinstance(map_payment_intent(payment_intent(currency=code)), Rejection)

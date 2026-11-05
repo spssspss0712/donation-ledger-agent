@@ -98,15 +98,9 @@ MUTATIONS = [
         "    if False:\n        out.issues +=",
     ),
     Mutation(
-        "fill_even_when_money_differs",
-        "donation_ledger/contacts.py",
-        "            continue\n        for field in CONTACT_FIELDS:",
-        "            pass\n        for field in CONTACT_FIELDS:",
-    ),
-    Mutation(
         "money_difference_not_reported",
         "donation_ledger/contacts.py",
-        "        if check_money and changed_money:",
+        "        if changed_money:",
         "        if False:",
     ),
     Mutation(

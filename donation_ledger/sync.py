@@ -176,9 +176,10 @@ def _process_batch(
             continue
         if outcome.entry_id in existing:
             c.rows_duplicate_skipped += 1
-            c.issues_recorded += _warn_if_changed(
-                session, outcome, existing[outcome.entry_id], run_id
-            )
+            if not isinstance(outcome.result, NewDonation):
+                c.issues_recorded += _warn_if_changed(
+                    session, outcome, existing[outcome.entry_id], run_id
+                )
         elif isinstance(outcome.result, NewDonation):
             # "ignored" only silences rejections; a row that became valid must be ingested.
             to_insert.append(outcome.result)
@@ -186,12 +187,13 @@ def _process_batch(
             _quarantine(session, outcome.result, run_id, ignored, c)
     inserted = insert_donations(session, to_insert)
     c.rows_inserted += len(inserted)
-    # Contact fill-once and warnings for every valid row, new or already stored. Money is
-    # compared on the raw cell text by _warn_if_changed, so it is not compared again here.
+    # Contact fill-once and warnings for every valid row, new or already stored. Money of a
+    # parseable row is compared by value in apply_reads (a reformatted cell is not a change);
+    # only rows that no longer parse use the raw-text comparison in _warn_if_changed.
     valid = [
         o.result for o in batch if isinstance(o, Candidate) and isinstance(o.result, NewDonation)
     ]
-    contact = apply_reads(session, valid, inserted, run_id, check_money=False)
+    contact = apply_reads(session, valid, inserted, run_id)
     c.contacts_filled += contact.filled
     c.issues_recorded += contact.issues
     # Not inserted although new a moment ago: someone else wrote it first. Still a duplicate.

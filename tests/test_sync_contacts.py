@@ -179,16 +179,39 @@ def test_going_back_to_the_first_csv_never_blanks_filled_contacts(engine: Engine
     )
 
 
-def test_a_row_with_different_money_does_not_fill_contacts_of_the_stored_donation(
+def test_a_row_whose_amount_was_edited_still_fills_contacts_but_never_changes_money(
     engine: Engine,
 ) -> None:
     sync(engine, ListReader([row("X1", amount="10")]))
-    res = sync(engine, ListReader([row("X1", name="Mallory", email="m@b.org", amount="9999")]))
-    assert res.counters.contacts_filled == 0
+    res = sync(engine, ListReader([row("X1", name="Ann", email="a@b.org", amount="9999")]))
+    # Same Entry ID = same donation (SPEC 2.3): contacts are filled, money is untouched,
+    # and the money difference is reported for a human.
+    assert res.counters.contacts_filled == 2
     assert rows(engine, "SELECT donor_name, donor_email, amount_minor FROM donations") == [
-        (None, None, 1000)
+        ("Ann", "a@b.org", 1000)
     ]
     assert rows(engine, "SELECT kind FROM sync_issues") == [("changed_after_sync",)]
+
+
+def test_reformatting_a_date_or_amount_without_changing_its_value_is_not_a_change(
+    engine: Engine,
+) -> None:
+    first = ["R1", "2024-03-01", "", "", "", "1000", "USD", ""]
+    second = ["R1", "3/1/2024", "", "", "", "$1,000.00", "usd", ""]
+    sync(engine, ListReader([first]))
+    res = sync(engine, ListReader([second]))
+    assert res.counters.issues_recorded == 0
+    assert rows(engine, "SELECT count(*) FROM sync_issues") == [(0,)]
+
+
+def test_a_real_change_of_date_or_currency_is_reported_with_the_parsed_field_names(
+    engine: Engine,
+) -> None:
+    sync(engine, ListReader([["D1", "2024-03-01", "", "", "", "10", "USD", ""]]))
+    sync(engine, ListReader([["D1", "2024-03-02", "", "", "", "10", "EUR", ""]]))
+    assert rows(engine, "SELECT detail->'changed_fields' FROM sync_issues") == [
+        (["currency", "donated_at"],)
+    ]
 
 
 def test_the_word_anonymous_or_a_blank_cell_never_fills_or_clears_a_name(engine: Engine) -> None:
