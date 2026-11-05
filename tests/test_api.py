@@ -136,7 +136,7 @@ def test_sync_runs_endpoint_lists_latest_first_with_counters(
     run_sync(engine, ListReader([]), TZ, 500)
     runs = client.get("/sync-runs", headers=AUTH).json()
     assert [r["id"] for r in runs] == [2, 1]
-    assert runs[1]["rows_inserted"] == 6 and runs[1]["rows_quarantined"] == 9
+    assert runs[1]["rows_inserted"] == 7 and runs[1]["rows_quarantined"] == 9
     assert runs[1]["status"] == "succeeded" and runs[0]["rows_read"] == 0
 
 

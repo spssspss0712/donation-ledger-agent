@@ -12,7 +12,16 @@ from donation_ledger.sources import CsvSheetReader, SheetReadError, SheetTable
 from donation_ledger.sync import SyncResult, run_sync
 
 TZ = "America/Los_Angeles"
-HEADER = ["Entry ID", "Date", "Donor Name", "Donor Address", "Amount", "Currency", "Recipient"]
+HEADER = [
+    "Entry ID",
+    "Date",
+    "Donor Name",
+    "Donor Email",
+    "Donor Address",
+    "Amount",
+    "Currency",
+    "Recipient",
+]
 NOW = datetime(2025, 6, 1, tzinfo=UTC)
 SAMPLE = Path("sample_data/sheet.csv")
 
@@ -36,8 +45,10 @@ def rows(engine: Engine, sql: str) -> list[tuple[object, ...]]:
         return [tuple(r) for r in conn.execute(text(sql))]
 
 
-def good(entry: str, amount: str = "10", name: str = "Pat Doe") -> list[str]:
-    return [entry, "2024-03-01", name, "1 Road", amount, "USD", "Fund"]
+def good(
+    entry: str, amount: str = "10", name: str = "Pat Doe", email: str = "pat@example.org"
+) -> list[str]:
+    return [entry, "2024-03-01", name, email, "1 Road", amount, "USD", "Fund"]
 
 
 def test_sample_csv_inserts_good_rows_and_quarantines_bad_ones_with_reasons(engine: Engine) -> None:
@@ -55,6 +66,22 @@ def test_sample_csv_inserts_good_rows_and_quarantines_bad_ones_with_reasons(engi
         ("S-004", "Bob Lee", False, 100000, "EUR", "2024-03-04 17:15:00+00"),
         ("S-012", "Jun Sato", False, 5000, "JPY", "2024-03-12 07:00:00+00"),
         ("S-013", "Kim Nguyen", False, 1999, "USD", "2025-01-01 07:30:00+00"),
+        ("S-015", "Mia Costa", False, 4000, "USD", "2024-03-15 07:00:00+00"),
+    ]
+    # Emails: trimmed and lowercased; missing -> NULL; malformed ("not-an-email", no dot in
+    # the domain) -> NULL with the donation still stored.
+    assert rows(engine, "SELECT external_id, donor_email FROM donations ORDER BY external_id") == [
+        ("S-001", "alice@example.org"),
+        ("S-002", None),
+        ("S-003", None),
+        ("S-004", "bob@example.org"),
+        ("S-012", None),
+        ("S-013", None),
+        ("S-015", "mia@example.org"),
+    ]
+    assert rows(engine, "SELECT external_id, kind FROM sync_issues ORDER BY external_id") == [
+        ("S-003", "invalid_email"),
+        ("S-013", "invalid_email"),
     ]
     rejected = rows(
         engine,
@@ -72,12 +99,12 @@ def test_sample_csv_inserts_good_rows_and_quarantines_bad_ones_with_reasons(engi
         ("S-014", "malformed_row"),
     ]
     assert (res.counters.rows_read, res.counters.rows_inserted, res.counters.rows_quarantined) == (
-        15,
-        6,
+        16,
+        7,
         9,
     )
     run = rows(engine, "SELECT status, rows_read, rows_inserted, rows_quarantined FROM sync_runs")
-    assert run == [("succeeded", 15, 6, 9)]
+    assert run == [("succeeded", 16, 7, 9)]
 
 
 def test_the_word_anonymous_is_never_stored(engine: Engine) -> None:
@@ -94,7 +121,8 @@ def test_rerunning_the_same_sheet_changes_nothing_and_reports_duplicates(engine:
     assert second.status == "succeeded"
     assert rows(engine, "SELECT * FROM donations ORDER BY id") == before
     assert second.counters.rows_inserted == 0
-    assert second.counters.rows_duplicate_skipped == 6
+    assert second.counters.rows_duplicate_skipped == 7
+    assert second.counters.issues_recorded == 0  # the two invalid_email warnings are not repeated
     # Quarantined rows are re-evaluated every run, not skipped forever: one row each.
     assert rows(engine, "SELECT count(*), max(attempts) FROM rejected_rows") == [(9, 2)]
 
@@ -221,12 +249,13 @@ def test_header_matching_ignores_case_spacing_bom_and_column_order(engine: Engin
         "Donor Address",
         "currency",
         "donor name",
+        "  DONOR   email",
     ]
-    row = ["M1", "2024-03-01", "Fund", "5", "1 Road", "", "Zed"]
+    row = ["M1", "2024-03-01", "Fund", "5", "1 Road", "", "Zed", "Zed@X.org"]
     res = sync(engine, ListReader([row], header=header))
     assert res.status == "succeeded"
-    assert rows(engine, "SELECT donor_name, recipient, currency FROM donations") == [
-        ("Zed", "Fund", "USD")
+    assert rows(engine, "SELECT donor_name, recipient, currency, donor_email FROM donations") == [
+        ("Zed", "Fund", "USD", "zed@x.org")
     ]
 
 
@@ -252,7 +281,10 @@ def test_truncated_rows_are_quarantined_but_explicitly_blank_trailing_cells_are_
     res = sync(
         engine,
         ListReader(
-            [["P1", "2024-03-01", "Pat", "", "7"], ["P2", "2024-03-01", "Pat", "", "7", "", ""]]
+            [
+                ["P1", "2024-03-01", "Pat", "", "", "7"],
+                ["P2", "2024-03-01", "Pat", "", "", "7", "", ""],
+            ]
         ),
     )
     assert res.counters.rows_inserted == 1 and res.counters.rows_quarantined == 1
@@ -269,7 +301,9 @@ def test_nul_characters_quarantine_the_row_instead_of_crashing_the_batch(engine:
     assert rows(engine, "SELECT external_id FROM rejected_rows") == [("Q1",)]
 
 
-def test_very_long_values_are_quarantined_or_stored_without_error(engine: Engine) -> None:
+def test_over_long_contact_text_is_truncated_and_over_long_ids_are_quarantined(
+    engine: Engine,
+) -> None:
     long_name = "x" * 100_000
     res = sync(
         engine,
@@ -277,22 +311,27 @@ def test_very_long_values_are_quarantined_or_stored_without_error(engine: Engine
             [
                 good("R1", name=long_name),
                 good("R2"),
-                ["R3" * 500, "2024-03-01", "a", "b", "5", "USD", "c"],
+                ["R3" * 500, "2024-03-01", "a", "", "b", "5", "USD", "c"],
             ]
         ),
     )
     assert res.status == "succeeded"
-    assert rows(engine, "SELECT external_id FROM donations") == [("R2",)]
-    assert rows(engine, "SELECT count(*) FROM rejected_rows") == [(2,)]
+    # R1's 100,000-character name is contact text: cut and flagged, never a reason to refuse
+    # the donation (SPEC v2). R3's oversized Entry ID is not contact text and stays quarantined.
+    assert rows(engine, "SELECT external_id FROM donations ORDER BY 1") == [("R1",), ("R2",)]
+    assert rows(engine, "SELECT length(donor_name) FROM donations WHERE external_id='R1'") == [
+        (500,)
+    ]
+    assert rows(engine, "SELECT count(*) FROM rejected_rows") == [(1,)]
 
 
 def test_timezone_boundary_midnight_local_maps_to_the_correct_utc_instant(engine: Engine) -> None:
-    sync(engine, ListReader([["T1", "2024-06-30", "A", "", "5", "USD", ""]]))
+    sync(engine, ListReader([["T1", "2024-06-30", "A", "", "", "5", "USD", ""]]))
     assert rows(engine, "SELECT donated_at::text FROM donations") == [("2024-06-30 07:00:00+00",)]
 
 
 def test_future_dated_row_is_quarantined_until_it_is_plausible(engine: Engine) -> None:
-    res = sync(engine, ListReader([["U1", "2031-01-01", "A", "", "5", "USD", ""]]))
+    res = sync(engine, ListReader([["U1", "2031-01-01", "A", "", "", "5", "USD", ""]]))
     assert res.counters.rows_quarantined == 1
 
 
@@ -316,8 +355,8 @@ def test_csv_with_utf8_bom_and_crlf_and_quoted_newlines_is_read(
 ) -> None:
     p = tmp_path / "s.csv"
     p.write_bytes(
-        b"\xef\xbb\xbfEntry ID,Date,Donor Name,Donor Address,Amount,Currency,Recipient\r\n"
-        b'W1,2024-03-01,Zoe,"1 Road\nApt 2",5,USD,Fund\r\n'
+        b"\xef\xbb\xbfEntry ID,Date,Donor Name,Donor Email,Donor Address,Amount,Currency,Recipient\r\n"
+        b'W1,2024-03-01,Zoe,,"1 Road\nApt 2",5,USD,Fund\r\n'
     )
     res = sync(engine, CsvSheetReader(p))
     assert res.counters.rows_inserted == 1

@@ -15,20 +15,20 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import Engine, select, update
-from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from donation_ledger.config import ConfigError, Settings
+from donation_ledger.contacts import ISSUE_CHANGED_AFTER_SYNC, apply_reads
 from donation_ledger.db import make_engine
 from donation_ledger.ledger import (
     NewDonation,
     Rejection,
-    fingerprint_of,
     insert_donations,
+    record_issue,
     record_rejection,
 )
 from donation_ledger.logging_setup import configure_logging
-from donation_ledger.models import SOURCE_SHEET, Donation, RejectedRow, SyncIssue, SyncRun
+from donation_ledger.models import CONTACT_FIELDS, SOURCE_SHEET, Donation, RejectedRow, SyncRun
 from donation_ledger.runs import (
     Counters,
     LockNotAcquiredError,
@@ -45,8 +45,6 @@ from donation_ledger.sheet_rows import Candidate, Classified, HeaderError, Rejec
 from donation_ledger.sources import SheetReader, SheetReadError, make_reader
 
 log = logging.getLogger(__name__)
-
-ISSUE_CHANGED_AFTER_SYNC = "changed_after_sync"
 
 EXIT_OK = 0
 EXIT_FAILED = 1
@@ -188,6 +186,14 @@ def _process_batch(
             _quarantine(session, outcome.result, run_id, ignored, c)
     inserted = insert_donations(session, to_insert)
     c.rows_inserted += len(inserted)
+    # Contact fill-once and warnings for every valid row, new or already stored. Money is
+    # compared on the raw cell text by _warn_if_changed, so it is not compared again here.
+    valid = [
+        o.result for o in batch if isinstance(o, Candidate) and isinstance(o.result, NewDonation)
+    ]
+    contact = apply_reads(session, valid, inserted, run_id, check_money=False)
+    c.contacts_filled += contact.filled
+    c.issues_recorded += contact.issues
     # Not inserted although new a moment ago: someone else wrote it first. Still a duplicate.
     c.rows_duplicate_skipped += len(to_insert) - len(inserted)
     return c
@@ -213,10 +219,17 @@ def _load_existing(session: Session, ids: Sequence[str]) -> dict[str, dict[str, 
 
 
 def _warn_if_changed(session: Session, row: Candidate, stored: dict[str, Any], run_id: int) -> int:
-    """Append-only ledger: never update the donation, only record a (de-duplicated) warning."""
+    """Money (and the ID/date text) is immutable: never update, only record a warning.
+
+    Contact fields are deliberately excluded: they follow the fill-once rule in
+    ``contacts.apply_reads`` and are compared against the ``donations`` columns, because
+    rows stored by version 1 have no ``donor_email`` key in their raw payload.
+    """
     old = stored.get("fields") if isinstance(stored, dict) else None
     old = old if isinstance(old, dict) else {}
-    changed = sorted(k for k, v in row.fields.items() if old.get(k) != v)
+    changed = sorted(
+        k for k, v in row.fields.items() if k not in CONTACT_FIELDS and old.get(k) != v
+    )
     if not changed:
         return 0
     detail = {
@@ -224,38 +237,14 @@ def _warn_if_changed(session: Session, row: Candidate, stored: dict[str, Any], r
         "stored": {k: old.get(k) for k in changed},
         "current": {k: row.fields[k] for k in changed},
     }
-    stmt = (
-        pg_insert(SyncIssue)
-        .values(
-            source=SOURCE_SHEET,
-            external_id=row.entry_id,
-            kind=ISSUE_CHANGED_AFTER_SYNC,
-            detail=detail,
-            detail_hash=fingerprint_of(detail),
-            sync_run_id=run_id,
-        )
-        .on_conflict_do_nothing(constraint="uq_sync_issues_dedupe")
-        .returning(SyncIssue.id)
+    return record_issue(
+        session, SOURCE_SHEET, row.entry_id, ISSUE_CHANGED_AFTER_SYNC, detail, run_id
     )
-    return 1 if session.execute(stmt).first() is not None else 0
 
 
 def _warn_unprocessable(session: Session, ext: str, rej: Rejection, run_id: int) -> int:
     detail = {"became_unprocessable": rej.reason.split(":")[0]}
-    stmt = (
-        pg_insert(SyncIssue)
-        .values(
-            source=SOURCE_SHEET,
-            external_id=ext,
-            kind=ISSUE_CHANGED_AFTER_SYNC,
-            detail=detail,
-            detail_hash=fingerprint_of(detail),
-            sync_run_id=run_id,
-        )
-        .on_conflict_do_nothing(constraint="uq_sync_issues_dedupe")
-        .returning(SyncIssue.id)
-    )
-    return 1 if session.execute(stmt).first() is not None else 0
+    return record_issue(session, SOURCE_SHEET, ext, ISSUE_CHANGED_AFTER_SYNC, detail, run_id)
 
 
 def _mark_absent_rejections(session: Session, run_id: int) -> None:

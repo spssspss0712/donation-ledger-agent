@@ -1,17 +1,18 @@
-Entry ID,Date,Donor Name,Donor Address,Amount,Currency,Recipient
-S-001,2024-03-01,Alice Johnson,"12 Oak St, Portland, OR",100,USD,General Fund
-S-002,3/2/2024,,,"$1,000.50",,Scholarship Fund
-S-003,2024-03-03 14:30,ANONYMOUS,PO Box 5,25.5,usd,General Fund
-S-004,3/4/2024 9:15 AM,Bob Lee,"7 Elm Rd, Austin, TX","1,000",EUR,Food Bank
-S-005,2024-03-05,Carol Diaz,1 Main St,-5,USD,General Fund
-S-006,2024-03-06,Dan Wu,2 Main St,twelve dollars,USD,General Fund
-S-007,not a date,Eve Park,3 Main St,50,USD,General Fund
-S-008,2024-03-08,Frank Moy,4 Main St,10,USD,General Fund
-S-008,2024-03-08,Frank Moy (again),4 Main St,10,USD,General Fund
-,2024-03-09,Grace Ito,5 Main St,75,USD,General Fund
-S-010,2024-03-10,Hank Roe,6 Main St,0,USD,General Fund
-S-011,2024-03-11,Ivy Cho,7 Main St,20,ZZZ,General Fund
-S-012,2024-03-12,Jun Sato,Tokyo,5000,JPY,General Fund
-,,,,,,
-S-013,2024-12-31 23:30,Kim Nguyen,9 Main St,19.99,USD,Scholarship Fund
-S-014,2024-03-14,Lee Ann,10 Main St, Suite 4,30,USD,General Fund
+Entry ID,Date,Donor Name,Donor Email,Donor Address,Amount,Currency,Recipient
+S-001,2024-03-01,Alice Johnson,  Alice@Example.ORG ,"12 Oak St, Portland, OR",100,USD,General Fund
+S-002,3/2/2024,,,,"$1,000.50",,Scholarship Fund
+S-003,2024-03-03 14:30,ANONYMOUS,not-an-email,PO Box 5,25.5,usd,General Fund
+S-004,3/4/2024 9:15 AM,Bob Lee,bob@example.org,"7 Elm Rd, Austin, TX","1,000",EUR,Food Bank
+S-005,2024-03-05,Carol Diaz,,1 Main St,-5,USD,General Fund
+S-006,2024-03-06,Dan Wu,,2 Main St,twelve dollars,USD,General Fund
+S-007,not a date,Eve Park,,3 Main St,50,USD,General Fund
+S-008,2024-03-08,Frank Moy,,4 Main St,10,USD,General Fund
+S-008,2024-03-08,Frank Moy (again),,4 Main St,10,USD,General Fund
+,2024-03-09,Grace Ito,,5 Main St,75,USD,General Fund
+S-010,2024-03-10,Hank Roe,,6 Main St,0,USD,General Fund
+S-011,2024-03-11,Ivy Cho,,7 Main St,20,ZZZ,General Fund
+S-012,2024-03-12,Jun Sato,,Tokyo,5000,JPY,General Fund
+,,,,,,,
+S-013,2024-12-31 23:30,Kim Nguyen,kim@example,9 Main St,19.99,USD,Scholarship Fund
+S-014,2024-03-14,Lee Ann,,10 Main St, Suite 4,30,USD,General Fund
+S-015,2024-03-15,Mia Costa,mia@example.org,11 Main St,40,USD,General Fund

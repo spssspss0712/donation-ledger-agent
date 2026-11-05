@@ -270,7 +270,16 @@ def test_fuzzed_sheet_cells_and_payment_intents_never_raise_out_of_the_classifie
     def junk() -> str:
         return "".join(rng.choice(alphabet) for _ in range(rng.randint(0, 25)))
 
-    header = ["Entry ID", "Date", "Donor Name", "Donor Address", "Amount", "Currency", "Recipient"]
+    header = [
+        "Entry ID",
+        "Date",
+        "Donor Name",
+        "Donor Email",
+        "Donor Address",
+        "Amount",
+        "Currency",
+        "Recipient",
+    ]
     now = datetime(2025, 6, 1, tzinfo=UTC)
     for _ in range(3000):
         row = [junk() for _ in range(rng.randint(1, 9))]
@@ -323,15 +332,23 @@ def test_csv_with_a_bad_byte_and_an_oversized_cell_still_syncs_the_other_rows(
     big = "x" * 300_000
     p.write_bytes(
         (",".join(HEADER) + "\n").encode()
-        + b"C1,2024-03-01,Jos\xe9,,5,USD,\n"
-        + f"C2,2024-03-01,{big},,5,USD,\n".encode()
-        + b"C3,2024-03-01,Ok,,5,USD,\n"
+        + b"C1,2024-03-01,Jos\xe9,,,5,USD,\n"
+        + f"C2,2024-03-01,{big},,,5,USD,\n".encode()
+        + b"C3,2024-03-01,Ok,,,5,USD,\n"
     )
     res = run_sync(engine, CsvSheetReader(p), TZ)
     assert res.status == "succeeded"
-    # C1 has an undecodable byte: quarantined (not stored with U+FFFD); C2 is oversized.
-    assert rows(engine, "SELECT external_id FROM donations ORDER BY 1") == [("C3",)]
-    assert rows(engine, "SELECT external_id FROM rejected_rows ORDER BY 1") == [("C1",), ("C2",)]
+    # C1 has an undecodable byte: quarantined (not stored with U+FFFD). C2 has an oversized
+    # name: contact text never blocks a donation (SPEC v2), so it is stored cut to 500 chars
+    # and a contact_truncated warning is recorded.
+    assert rows(engine, "SELECT external_id FROM donations ORDER BY 1") == [("C2",), ("C3",)]
+    assert rows(engine, "SELECT length(donor_name) FROM donations WHERE external_id='C2'") == [
+        (500,)
+    ]
+    assert rows(engine, "SELECT external_id FROM rejected_rows ORDER BY 1") == [("C1",)]
+    assert rows(engine, "SELECT external_id, kind FROM sync_issues") == [
+        ("C2", "contact_truncated")
+    ]
 
 
 def test_hostile_values_that_overflow_or_use_surrogates_are_quarantined_not_fatal() -> None:
@@ -345,9 +362,9 @@ def test_hostile_values_that_overflow_or_use_surrogates_are_quarantined_not_fata
     table = SheetTable(
         HEADER,
         [
-            ["a1\ud800", "2024-03-01", "N", "", "5", "USD", ""],
-            ["a2", "2024-03-01", "N", "", "9" * 1_000_005, "USD", ""],
-            ["a3", "2024-03-01", "N", "", "5", "ınr", ""],
+            ["a1\ud800", "2024-03-01", "N", "", "", "5", "USD", ""],
+            ["a2", "2024-03-01", "N", "", "", "9" * 1_000_005, "USD", ""],
+            ["a3", "2024-03-01", "N", "", "", "5", "ınr", ""],
         ],
     )
     surrogate, huge, odd_currency = classify_table(table, "UTC", now)
@@ -387,7 +404,7 @@ def test_invisible_characters_cannot_disguise_ids_names_or_currencies(engine: En
         good("1001" + zw, name="Bob"),  # same ID once invisible chars are ignored
         good(zw),  # "blank" ID
         good("2002", name="Anonymous" + zw),
-        ["3003", "2024-03-01", "N", "", "5", zw, ""],  # invisible currency -> default USD
+        ["3003", "2024-03-01", "N", "", "", "5", zw, ""],  # invisible currency -> default USD
     ]
     run_sync(engine, ListReader(data), TZ)
     assert rows(engine, "SELECT external_id, donor_name, currency FROM donations ORDER BY 1") == [
@@ -417,7 +434,7 @@ def test_duplicate_extra_header_names_keep_both_columns(engine: Engine) -> None:
         engine, "SELECT jsonb_object_keys(raw_payload->'extra') FROM donations ORDER BY 1"
     ) == [
         ("Note",),
-        ("Note_9",),
+        ("Note_10",),
     ]
 
 
@@ -466,10 +483,10 @@ def test_non_utf8_bytes_are_quarantined_not_stored_as_replacement_characters(
     from tests.test_sync import HEADER, TZ
 
     p = tmp_path / "s.csv"
-    p.write_bytes((",".join(HEADER) + "\n").encode() + b"\xc9-1,2024-01-15,Jos\xe9,,50,,r\n")
+    p.write_bytes((",".join(HEADER) + "\n").encode() + b"\xc9-1,2024-01-15,Jos\xe9,,,50,,r\n")
     run_sync(engine, CsvSheetReader(p), TZ)
     assert rows(engine, "SELECT count(*) FROM donations") == [(0,)]
-    p.write_bytes((",".join(HEADER) + "\n").encode() + "É-1,2024-01-15,José,,50,,r\n".encode())
+    p.write_bytes((",".join(HEADER) + "\n").encode() + "É-1,2024-01-15,José,,,50,,r\n".encode())
     run_sync(engine, CsvSheetReader(p), TZ)  # fixed export
     assert rows(engine, "SELECT external_id FROM donations") == [("É-1",)]
 

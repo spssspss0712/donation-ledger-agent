@@ -20,6 +20,7 @@ from donation_ledger.parsing import (
     minor_units_from_decimal_string,
     normalize_currency,
     normalize_donor_name,
+    normalize_email,
     parse_sheet_datetime,
     strip_invisible,
 )
@@ -30,6 +31,7 @@ REQUIRED_COLUMNS = {
     "entry_id": "entry id",
     "date": "date",
     "donor_name": "donor name",
+    "donor_email": "donor email",
     "donor_address": "donor address",
     "amount": "amount",
     "currency": "currency",
@@ -162,11 +164,15 @@ def _classify_row(
         # A cut-off line (interrupted export) would otherwise parse as a smaller donation
         # that the append-only ledger could never correct. Readers must pad blank cells.
         return reject("malformed_row: fewer cells than header columns", entry_id)
-    if any("\ufffd" in c for c in cells):
+    # The email cell is exempt from both encoding checks below: a bad email must never
+    # quarantine a donation (SPEC 2.3). It is stored as NULL with an invalid_email warning.
+    email_at = mapping["donor_email"]
+    checked = [c for i, c in enumerate(cells) if i != email_at]
+    if any("\ufffd" in c for c in checked):
         # Produced by the CSV reader for undecodable bytes: storing it would be permanent
         # corruption, and a later UTF-8 re-export would then insert the donation twice.
         return reject("invalid_text: undecodable characters (is the file UTF-8?)", entry_id)
-    if any(has_nul(c) for c in cells):
+    if any(has_nul(c) for c in checked):
         return reject("invalid_text: contains NUL character", entry_id)
     if not entry_id:
         return reject("missing_entry_id")
@@ -180,7 +186,7 @@ def _classify_row(
     fields["entry_id"] = entry_id  # normalised form, so re-encoded IDs raise no warning
     if fields["donor_name"].casefold() == "anonymous":
         fields["donor_name"] = ""
-    result = _build_donation(entry_id, fields, raw, number, tz_name, now)
+    result = _build_donation(entry_id, fields, cell("donor_email"), raw, number, tz_name, now)
     if isinstance(result, str):
         return Candidate(
             number,
@@ -195,6 +201,7 @@ def _classify_row(
 def _build_donation(
     entry_id: str,
     fields: dict[str, str],
+    email_cell: str,
     raw: dict[str, Any],
     number: int,
     tz_name: str,
@@ -205,13 +212,22 @@ def _build_donation(
         currency = normalize_currency(fields["currency"])
         amount = minor_units_from_decimal_string(fields["amount"], currency)
         donated_at = parse_sheet_datetime(fields["date"], tz_name, now)
-        name = normalize_donor_name(fields["donor_name"])
-        address = " ".join(fields["donor_address"].split()) or None
-        recipient = " ".join(fields["recipient"].split()) or None
-        if address is not None and len(address) > MAX_ADDRESS_LEN:
-            raise RowError("invalid_address: too long")
-        if recipient is not None and len(recipient) > MAX_NAME_LEN:
-            raise RowError("invalid_recipient: too long")
+        truncated: list[str] = []
+        name_text = " ".join(fields["donor_name"].split())
+        if len(name_text) > MAX_NAME_LEN:
+            name_text = _cut(name_text, MAX_NAME_LEN, "donor_name", truncated) or ""
+        name = normalize_donor_name(name_text)
+        # Contact fields never quarantine a row: over-long text is cut and flagged instead.
+        address = _cut(
+            " ".join(fields["donor_address"].split()) or None,
+            MAX_ADDRESS_LEN,
+            "donor_address",
+            truncated,
+        )
+        recipient = _cut(
+            " ".join(fields["recipient"].split()) or None, MAX_NAME_LEN, "recipient", truncated
+        )
+        email = normalize_email(email_cell)
     except RowError as exc:
         return str(exc)
     except (ArithmeticError, ValueError, UnicodeError):
@@ -221,7 +237,9 @@ def _build_donation(
         source=SOURCE_SHEET,
         external_id=entry_id,
         donor_name=name,
-        donor_email=None,
+        donor_email=email.email,
+        invalid_email=email.invalid_text,
+        truncated=tuple(truncated),
         donor_address=address,
         recipient=recipient,
         amount_minor=amount,
@@ -229,3 +247,11 @@ def _build_donation(
         donated_at=donated_at,
         raw_payload={"fields": fields, "extra": extra, "sheet_row": number},
     )
+
+
+def _cut(value: str | None, limit: int, field: str, truncated: list[str]) -> str | None:
+    """Deterministic cut, so a re-read of the same cell equals the stored value."""
+    if value is None or len(value) <= limit:
+        return value
+    truncated.append(field)
+    return value[:limit].rstrip()
