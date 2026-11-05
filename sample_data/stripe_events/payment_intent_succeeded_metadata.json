@@ -1,0 +1,1 @@
+{"id":"evt_FAKE_sample_0004","object":"event","type":"payment_intent.succeeded","created":1735000301,"data":{"object":{"id":"pi_FAKE_sample_0003","object":"payment_intent","amount":4200,"amount_received":4200,"currency":"usd","created":1735000300,"status":"succeeded","metadata":{"donor_name":"Maya Patel","donor_email":"maya@example.org"}}}}

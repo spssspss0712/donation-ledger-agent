@@ -25,6 +25,10 @@ def test_demo_runs_end_to_end_against_a_demo_database() -> None:
     assert "donations rows: 1  (expected 1)" in out
     assert "HTTP 400" in out
     assert "duplicate (source, external_id) groups: 0" in out
+    assert "money fields unchanged: True" in out
+    assert "S-001 existing email kept: True" in out
+    assert "filled in once: late.receipt@example.org" in out
+    assert "contact_changed_after_sync" in out and "GET /followups" in out
 
 
 def test_alembic_cli_upgrades_an_empty_database_from_the_repo_root() -> None:

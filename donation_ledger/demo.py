@@ -12,6 +12,7 @@ import os
 import sys
 import tempfile
 from pathlib import Path
+from typing import Any
 
 from alembic import command
 from alembic.config import Config
@@ -41,6 +42,25 @@ def table(engine: Engine, sql: str) -> str:
         result = conn.execute(text(sql))
         header = list(result.keys())
         data = [[("" if v is None else str(v)) for v in row] for row in result]
+    widths = [
+        max(len(h), *(len(r[i]) for r in data)) if data else len(h) for i, h in enumerate(header)
+    ]
+    lines = ["  ".join(h.ljust(w) for h, w in zip(header, widths, strict=True))]
+    lines += ["  ".join(c.ljust(w) for c, w in zip(r, widths, strict=True)) for r in data]
+    return "\n".join(lines)
+
+
+def post_signed(client: TestClient, body: bytes) -> Any:
+    from tests.helpers import sign
+
+    return client.post(
+        "/webhooks/stripe",
+        content=body,
+        headers={"Stripe-Signature": sign(body, DEMO_WEBHOOK_SECRET)},
+    )
+
+
+def table_rows(header: list[str], data: list[list[str]]) -> str:
     widths = [
         max(len(h), *(len(r[i]) for r in data)) if data else len(h) for i, h in enumerate(header)
     ]
@@ -98,13 +118,21 @@ def main() -> int:
         )
         print(f"delivery #{attempt}: HTTP {resp.status_code} {resp.json()}")
     print(f"donations rows: {count(engine, 'donations')}  (expected 1)")
+    meta_body = (SAMPLES / "stripe_events" / "payment_intent_succeeded_metadata.json").read_bytes()
+    resp = post_signed(client, meta_body)
+    print(f"a payment with donor name and email in metadata: HTTP {resp.status_code} {resp.json()}")
     anon_body = (SAMPLES / "stripe_events" / "payment_intent_succeeded_anonymous.json").read_bytes()
-    resp = client.post(
-        "/webhooks/stripe",
-        content=anon_body,
-        headers={"Stripe-Signature": sign(anon_body, DEMO_WEBHOOK_SECRET)},
+    resp = post_signed(client, anon_body)
+    print(f"a payment with no donor details at all: HTTP {resp.status_code} {resp.json()}")
+    late = json.loads(anon_body)
+    late["id"] = "evt_FAKE_sample_0005"
+    late["data"]["object"]["receipt_email"] = "Late.Receipt@Example.org"
+    resp = post_signed(client, json.dumps(late).encode())
+    print(
+        f"the same payment delivered again, now with an email: HTTP {resp.status_code} "
+        f"{resp.json()} -> filled in once: "
+        f"{table(engine, 'SELECT donor_email FROM donations WHERE external_id = ' + chr(39) + 'pi_FAKE_sample_0002' + chr(39)).splitlines()[1]}"
     )
-    print(f"a second payment with no donor name: HTTP {resp.status_code} {resp.json()}")
     refund = (SAMPLES / "stripe_events" / "charge_refunded.json").read_bytes()
     resp = client.post(
         "/webhooks/stripe",
@@ -149,6 +177,7 @@ def main() -> int:
                         f"D-{i:02d}",
                         "2024-05-01",
                         f"Donor {i}",
+                        f"donor{i}@example.org" if i % 2 == 0 else "",
                         "",
                         f"{i + 1}.00",
                         "USD",
@@ -190,13 +219,56 @@ def main() -> int:
             ).scalar_one()
         print(f"duplicate (source, external_id) groups: {dupes}")
 
-    say("6. Final tables")
+    say(
+        "6. Sync a second CSV: empty contacts are filled once, nothing else changes",
+        "sheet_update.csv completes some empty cells, puts a DIFFERENT email on a row that\n"
+        "already has one, and changes an amount.",
+    )
+    money_sql = (
+        "SELECT md5(string_agg(external_id || amount_minor || currency || donated_at::text || "
+        "source, ',' ORDER BY id)) FROM donations"
+    )
+    with engine.connect() as conn:
+        money_before = conn.execute(text(money_sql)).scalar_one()
+        emails_before = conn.execute(
+            text("SELECT external_id, donor_email FROM donations WHERE external_id = 'S-001'")
+        ).one()
+    result = run_sync(engine, CsvSheetReader(SAMPLES / "sheet_update.csv"), "America/Los_Angeles")
+    print(f"status={result.status} {result.counters}")
+    with engine.connect() as conn:
+        money_after = conn.execute(text(money_sql)).scalar_one()
+        emails_after = conn.execute(
+            text("SELECT external_id, donor_email FROM donations WHERE external_id = 'S-001'")
+        ).one()
+    print(f"money fields unchanged: {money_before == money_after}")
+    print(
+        f"S-001 existing email kept: {tuple(emails_before) == tuple(emails_after)} ({emails_after[1]})"
+    )
+    print("\naudit of every fill (the new value itself is not stored here):")
+    print(
+        table(
+            engine,
+            "SELECT d.external_id, c.field_name, c.source, c.sync_run_id AS run "
+            "FROM donation_contact_changes c JOIN donations d ON d.id = c.donation_id ORDER BY c.id",
+        )
+    )
+    print("\nwarnings for a human (no contact values in them):")
+    print(
+        table(
+            engine,
+            "SELECT source, external_id, kind FROM sync_issues "
+            "WHERE kind <> 'invalid_email' ORDER BY id",
+        )
+    )
+
+    say("7. Final tables, follow-up list and sync_runs")
     print("donations:")
     print(
         table(
             engine,
             "SELECT id, source, external_id, coalesce(donor_name,'(anonymous)') AS donor, "
-            "amount_minor, currency, donated_at FROM donations ORDER BY id",
+            "coalesce(donor_email,'-') AS email, amount_minor, currency, donated_at "
+            "FROM donations ORDER BY id",
         )
     )
     print("\nsync_runs:")
@@ -204,7 +276,8 @@ def main() -> int:
         table(
             engine,
             "SELECT id, source, status, rows_read, rows_inserted, rows_duplicate_skipped, "
-            "rows_quarantined, left(coalesce(error_message,''),40) AS error FROM sync_runs ORDER BY id",
+            "rows_quarantined, contacts_filled AS filled, "
+            "left(coalesce(error_message,''),40) AS error FROM sync_runs ORDER BY id",
         )
     )
     print("\nrejected_rows:")
@@ -212,6 +285,14 @@ def main() -> int:
         table(
             engine,
             "SELECT id, source, coalesce(external_id,'-') AS ext, status FROM rejected_rows ORDER BY id",
+        )
+    )
+    print("\nGET /followups (donations with no email; no contact data is returned):")
+    follow = client.get("/followups?limit=100").json()["items"]
+    print(
+        table_rows(
+            ["donation_id", "source", "external_id", "reason"],
+            [[str(i["donation_id"]), i["source"], i["external_id"], i["reason"]] for i in follow],
         )
     )
     print("\nGET /donations (anonymous donors are shown as 'Anonymous'):")
