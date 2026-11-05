@@ -227,3 +227,10 @@ def test_google_reader_reports_failures_without_leaking_credentials() -> None:
     with pytest.raises(SheetReadError) as info:
         reader.read()
     assert "FAKE-KEY-MATERIAL" not in str(info.value)
+
+
+def test_sheet_timezone_defaults_to_los_angeles_when_the_variable_is_not_set() -> None:
+    s = Settings.from_env({"DATABASE_URL": "postgres://u:p@h/db"})
+    assert s.sheet_timezone == "America/Los_Angeles"
+    custom = Settings.from_env({"DATABASE_URL": "postgres://u:p@h/db", "SHEET_TIMEZONE": "UTC"})
+    assert custom.sheet_timezone == "UTC"

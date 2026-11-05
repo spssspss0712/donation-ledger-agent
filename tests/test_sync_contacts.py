@@ -344,3 +344,40 @@ def test_a_lone_surrogate_in_an_email_cell_does_not_fail_the_whole_sync(engine: 
         ("S2", None),
     ]
     assert rows(engine, "SELECT external_id, kind FROM sync_issues") == [("S2", "invalid_email")]
+
+
+def test_a_failure_after_every_other_write_of_the_batch_rolls_back_the_warnings_too(
+    engine: Engine,
+) -> None:
+    """Fault at the very end (counter update), when warnings, fills and rejections exist."""
+    sync(engine, ListReader([row("W1", amount="10"), row("W2")]))
+    before = _snapshot(engine)
+    second = [
+        row("W1", amount="55"),  # changed_after_sync warning
+        row("W2", name="Late", email="late@b.org"),  # contact fill + audit row
+        row("W3", email="nope"),  # new donation + invalid_email warning
+        row("W4", amount="bad"),  # quarantine record
+    ]
+    seen = {"n": 0}
+
+    def boom(conn, cursor, statement, parameters, context, executemany):  # type: ignore[no-untyped-def]
+        if statement.lstrip().upper().startswith("UPDATE SYNC_RUNS SET ROWS_READ"):
+            seen["n"] += 1
+            raise RuntimeError("injected failure after all batch writes")
+
+    sa_event.listen(engine, "before_cursor_execute", boom)
+    try:
+        res = sync(engine, ListReader(second))
+    finally:
+        sa_event.remove(engine, "before_cursor_execute", boom)
+    assert seen["n"] == 1 and res.status == "failed"
+    after = _snapshot(engine)
+    runs_before, runs_after = before.pop("counters"), after.pop("counters")
+    assert after == before  # includes sync_issues, audit rows, rejections, donations
+    assert runs_after[:-1] == runs_before
+    ok = sync(engine, ListReader(second))
+    assert ok.status == "succeeded"
+    assert rows(engine, "SELECT kind FROM sync_issues ORDER BY kind") == [
+        ("changed_after_sync",),
+        ("invalid_email",),
+    ]

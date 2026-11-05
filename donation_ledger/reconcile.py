@@ -13,7 +13,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
-from sqlalchemy import Engine
+from sqlalchemy import Engine, select
 from sqlalchemy.orm import Session
 
 from donation_ledger.config import ConfigError, Settings
@@ -27,7 +27,7 @@ from donation_ledger.ledger import (
     record_rejection,
 )
 from donation_ledger.logging_setup import configure_logging
-from donation_ledger.models import RUN_STRIPE_RECONCILE, SOURCE_STRIPE
+from donation_ledger.models import RUN_STRIPE_RECONCILE, SOURCE_STRIPE, RejectedRow
 from donation_ledger.runs import (
     Counters,
     LockNotAcquiredError,
@@ -108,6 +108,15 @@ def _run_locked(
         since = (now or datetime.now(UTC)) - lookback
         # Materialise first: a broken Stripe listing must fail before we write anything.
         intents = [pi for pi in source.list_since(since) if pi.get("status") == "succeeded"]
+        # Payments quarantined earlier under a stricter rule (e.g. the old currency whitelist)
+        # are older than the lookback window, so listing would never see them again.
+        for redo in chunks(_open_stripe_rejections(engine), batch_size):
+            assert_lock_still_held(lock_conn)
+            with Session(engine) as session, session.begin():
+                redo_counters = _redrive(session, redo, run_id)
+                add_counters(session, run_id, redo_counters)
+            counters.add(redo_counters)
+            committed += 1
         for batch in chunks(intents, batch_size):
             assert_lock_still_held(lock_conn)
             with Session(engine) as session, session.begin():
@@ -130,6 +139,38 @@ def _run_locked(
         return SyncResult(run_id, status, counters, message)
     log.info("reconcile finished", extra={"run_id": run_id, **counters.__dict__})
     return SyncResult(run_id, "succeeded", counters)
+
+
+def _open_stripe_rejections(engine: Engine) -> list[dict[str, Any]]:
+    stmt = (
+        select(RejectedRow.raw_row)
+        .where(
+            RejectedRow.source == SOURCE_STRIPE,
+            RejectedRow.status == "open",
+            RejectedRow.external_id.is_not(None),
+        )
+        .order_by(RejectedRow.id)
+    )
+    with Session(engine) as session:
+        return list(session.scalars(stmt))
+
+
+def _redrive(session: Session, stored: Sequence[Mapping[str, Any]], run_id: int) -> Counters:
+    """Insert the quarantined payments that map cleanly under the CURRENT rules.
+
+    Those that still fail are left exactly as they are (no attempt counter, no new row).
+    Inserting resolves the matching open rejection (``insert_donations``).
+    """
+    c = Counters(rows_read=len(stored))
+    ready = [m for m in (map_payment_intent(raw) for raw in stored) if isinstance(m, NewDonation)]
+    lock_external_ids(session, SOURCE_STRIPE, [d.external_id for d in ready])
+    inserted = insert_donations(session, ready)
+    outcome = apply_reads(session, ready, inserted, run_id)
+    c.rows_inserted += len(inserted)
+    c.rows_duplicate_skipped += len(ready) - len(inserted)
+    c.contacts_filled += outcome.filled
+    c.issues_recorded += outcome.issues
+    return c
 
 
 def _process(session: Session, batch: Sequence[Mapping[str, Any]], run_id: int) -> Counters:

@@ -182,6 +182,24 @@ MUTATIONS = [
         "    if len(code) != 3:",
     ),
     Mutation(
+        "reconcile_does_not_redrive_old_quarantines",
+        "donation_ledger/reconcile.py",
+        "        for redo in chunks(_open_stripe_rejections(engine), batch_size):",
+        "        for redo in chunks([], batch_size):",
+    ),
+    Mutation(
+        "warning_recorded_outside_the_batch_transaction",
+        "donation_ledger/ledger.py",
+        "    return 1 if session.execute(stmt).first() is not None else 0",
+        "    with Session(session.get_bind()) as other, other.begin():\n        return 1 if other.execute(stmt).first() is not None else 0",
+    ),
+    Mutation(
+        "default_sheet_timezone_changed",
+        "donation_ledger/config.py",
+        '    sheet_timezone: str = "America/Los_Angeles"',
+        '    sheet_timezone: str = "UTC"',
+    ),
+    Mutation(
         "sheet_currency_whitelist_removed",
         "donation_ledger/parsing.py",
         "    if not raw.isascii() or code not in ISO_4217:",
@@ -259,7 +277,7 @@ MUTATIONS = [
 
 def run_tests() -> list[str]:
     proc = subprocess.run(  # noqa: S603
-        [sys.executable, "-m", "pytest", "-q", "--tb=no", "-p", "no:cacheprovider", "--maxfail=40"],
+        [sys.executable, "-m", "pytest", "-q", "--tb=no", "-p", "no:cacheprovider", "--maxfail=1"],
         cwd=ROOT,
         capture_output=True,
         text=True,
@@ -303,9 +321,7 @@ def main(argv: list[str]) -> int:
             path.write_text(original, encoding="utf-8")
         verdict = "CAUGHT" if failed else "NOT CAUGHT  <-- add a test"
         missed += 0 if failed else 1
-        print(f"{verdict}: {m.name} ({len(failed)} failing)")
-        for name in failed[:4]:
-            print(f"      {name}")
+        print(f"{verdict}: {m.name}" + (f"  (first failing: {failed[0]})" if failed else ""))
     print(f"\n{len(selected) - missed}/{len(selected)} mutations caught")
     return 1 if missed else 0
 

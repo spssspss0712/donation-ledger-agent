@@ -197,3 +197,69 @@ def test_reconciliation_stores_a_payment_whose_currency_is_not_in_the_iso_list(
     res = reconcile(engine, FakeStripe([payment_intent("pi_ODD2", currency="qqq")]))
     assert res.counters.rows_inserted == 1 and res.counters.rows_quarantined == 0
     assert rows(engine, "SELECT currency FROM donations") == [("QQQ",)]
+
+
+# --- re-driving Stripe payments quarantined by an older rule (e.g. the v1 currency whitelist) ---
+
+
+def quarantine_like_v1(engine: Engine, pi: dict[str, Any], reason: str) -> None:
+    import json
+
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO rejected_rows (source, external_id, raw_row, reason, row_fingerprint)"
+                " VALUES ('stripe', :e, CAST(:r AS jsonb), :why, :fp)"
+            ),
+            {"e": pi["id"], "r": json.dumps(pi), "why": reason, "fp": "fp-" + pi["id"]},
+        )
+
+
+def test_reconciliation_redrives_an_old_stripe_quarantine_that_is_now_acceptable(
+    engine: Engine,
+) -> None:
+    old = payment_intent(
+        "pi_OLDXYZ", currency="xyz", created=1_700_000_000, receipt_email="o@x.org"
+    )
+    quarantine_like_v1(engine, old, "invalid_currency: missing or not a 3-letter code")
+    # Stripe lists nothing in the lookback window: the payment is far older than 72 hours.
+    res = reconcile(engine, FakeStripe([]))
+    assert res.status == "succeeded" and res.counters.rows_inserted == 1
+    assert rows(engine, "SELECT external_id, currency, donor_email FROM donations") == [
+        ("pi_OLDXYZ", "XYZ", "o@x.org")
+    ]
+    assert rows(engine, "SELECT status FROM rejected_rows") == [("resolved",)]
+    again = reconcile(engine, FakeStripe([]))
+    assert again.counters.rows_inserted == 0
+    assert rows(engine, "SELECT count(*) FROM donations") == [(1,)]
+
+
+def test_redrive_leaves_still_unacceptable_stripe_quarantines_open_and_untouched(
+    engine: Engine,
+) -> None:
+    bad = payment_intent("pi_STILLBAD", amount=0)
+    bad["amount_received"] = 0
+    quarantine_like_v1(engine, bad, "invalid_amount: missing, zero or negative")
+    res = reconcile(engine, FakeStripe([]))
+    assert res.counters.rows_inserted == 0
+    assert rows(engine, "SELECT status, attempts FROM rejected_rows") == [("open", 1)]
+    assert rows(engine, "SELECT count(*) FROM donations") == [(0,)]
+
+
+def test_redrive_never_touches_ignored_or_sheet_rejections(engine: Engine) -> None:
+    ignored = payment_intent("pi_IGN", currency="xyz")
+    quarantine_like_v1(engine, ignored, "invalid_currency")
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE rejected_rows SET status='ignored'"))
+        conn.execute(
+            text(
+                "INSERT INTO rejected_rows (source, external_id, raw_row, reason, row_fingerprint)"
+                " VALUES ('sheet', 'S-1', '{}', 'invalid_amount', 'fp-sheet')"
+            )
+        )
+    reconcile(engine, FakeStripe([]))
+    assert rows(engine, "SELECT count(*) FROM donations") == [(0,)]
+    assert sorted(r[0] for r in rows(engine, "SELECT status FROM rejected_rows")) == [  # type: ignore[type-var]
+        "ignored",
+        "open",
+    ]
