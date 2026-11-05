@@ -24,6 +24,7 @@ from donation_ledger.api import create_app
 from donation_ledger.config import Settings, normalize_database_url
 from donation_ledger.db import make_engine
 from donation_ledger.sources import CsvSheetReader
+from donation_ledger.stripe_signing import sign_payload
 from donation_ledger.sync import run_sync
 
 # Clearly fake: only used to sign the demo's own fake events.
@@ -51,12 +52,10 @@ def table(engine: Engine, sql: str) -> str:
 
 
 def post_signed(client: TestClient, body: bytes) -> Any:
-    from tests.helpers import sign
-
     return client.post(
         "/webhooks/stripe",
         content=body,
-        headers={"Stripe-Signature": sign(body, DEMO_WEBHOOK_SECRET)},
+        headers={"Stripe-Signature": sign_payload(body, DEMO_WEBHOOK_SECRET)},
     )
 
 
@@ -75,8 +74,6 @@ def count(engine: Engine, name: str) -> int:
 
 
 def main() -> int:
-    from tests.helpers import sign  # the same signer the tests use
-
     url = normalize_database_url(
         os.environ.get(
             "DEMO_DATABASE_URL", "postgresql+psycopg://ledger:ledger@localhost:5432/ledger_demo"
@@ -114,7 +111,7 @@ def main() -> int:
         resp = client.post(
             "/webhooks/stripe",
             content=body,
-            headers={"Stripe-Signature": sign(body, DEMO_WEBHOOK_SECRET)},
+            headers={"Stripe-Signature": sign_payload(body, DEMO_WEBHOOK_SECRET)},
         )
         print(f"delivery #{attempt}: HTTP {resp.status_code} {resp.json()}")
     print(f"donations rows: {count(engine, 'donations')}  (expected 1)")
@@ -137,7 +134,7 @@ def main() -> int:
     resp = client.post(
         "/webhooks/stripe",
         content=refund,
-        headers={"Stripe-Signature": sign(refund, DEMO_WEBHOOK_SECRET)},
+        headers={"Stripe-Signature": sign_payload(refund, DEMO_WEBHOOK_SECRET)},
     )
     print(
         f"refund event (out of scope): HTTP {resp.status_code}, donations still {count(engine, 'donations')}"
@@ -147,7 +144,7 @@ def main() -> int:
     resp = client.post(
         "/webhooks/stripe",
         content=body,
-        headers={"Stripe-Signature": sign(body, "whsec_FAKE_attacker_guess")},
+        headers={"Stripe-Signature": sign_payload(body, "whsec_FAKE_attacker_guess")},
     )
     print(
         f"HTTP {resp.status_code} {resp.json()}  -> rejected, donations still {count(engine, 'donations')}"

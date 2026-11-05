@@ -97,7 +97,7 @@ The sheet must have these columns in row 1 (any order, case-insensitive): `Entry
 ```bash
 make check         # ruff, ruff format --check, mypy --strict, pytest
 make audit         # pip-audit on the pinned runtime dependencies
-python scripts/break_it.py   # optional, slow: weakens each safety property in turn and checks that a test fails
+python scripts/break_it.py   # optional, ~15 min: weakens each safety property in turn and checks that a test fails (exit 2 if a mutation is stale)
 ```
 
 Run one test session at a time per database (some tests assert that no advisory locks are held). The migration upgrade test creates and drops a scratch database next to the test database, so the database role needs `CREATEDB` (the docker-compose / CI `ledger` role has it). Tests need a real PostgreSQL at `TEST_DATABASE_URL` (default `.../ledger_test`; its `public` schema is **dropped and recreated** by the test session, so never point it at real data). Stripe and Google are never contacted: events are signed offline with the documented HMAC scheme and verified by the Stripe SDK's `Webhook.construct_event`.
