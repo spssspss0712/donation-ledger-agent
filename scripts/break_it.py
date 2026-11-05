@@ -276,13 +276,23 @@ MUTATIONS = [
 
 
 def run_tests() -> list[str]:
+    """Names of failing tests ([] = the suite passed). The harness's own test is excluded: it
+    checks mutation targets against the tree, which a mutation legitimately changes."""
     proc = subprocess.run(  # noqa: S603
-        [sys.executable, "-m", "pytest", "-q", "--tb=no", "-p", "no:cacheprovider", "--maxfail=1"],
+        [
+            sys.executable, "-m", "pytest", "-q", "--tb=no", "-p", "no:cacheprovider",
+            "--maxfail=1", "--ignore=tests/test_break_it_script.py",
+        ],
         cwd=ROOT,
         capture_output=True,
         text=True,
-    )
-    return [ln.split(" ")[1] for ln in proc.stdout.splitlines() if ln.startswith("FAILED ")]
+    )  # fmt: skip
+    names = [
+        ln.split(" ")[1] for ln in proc.stdout.splitlines() if ln.startswith(("FAILED ", "ERROR "))
+    ]
+    if proc.returncode != 0 and not names:
+        names = ["(pytest exited non-zero)"]
+    return names
 
 
 def stale(mutations: list[Mutation]) -> list[str]:
@@ -306,6 +316,12 @@ def main(argv: list[str]) -> int:
         for name in broken:
             print(f"  - {name}")
         print("Nothing was run.")
+        return 2
+    baseline = run_tests()
+    if baseline:
+        print(
+            f"ERROR: the unmutated suite is not green ({baseline[0]}); results would be meaningless."
+        )
         return 2
     missed = 0
     for m in selected:
