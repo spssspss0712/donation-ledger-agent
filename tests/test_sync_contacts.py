@@ -334,3 +334,13 @@ def test_a_failing_batch_also_rolls_back_quarantine_records_written_in_that_batc
 
 def test_good_helper_rows_still_have_eight_cells() -> None:
     assert len(good("Z")) == len(HEADER) == 8
+
+
+def test_a_lone_surrogate_in_an_email_cell_does_not_fail_the_whole_sync(engine: Engine) -> None:
+    res = sync(engine, ListReader([row("S1"), row("S2", email="a\ud800@b.org")]))
+    assert res.status == "succeeded" and res.counters.rows_inserted == 2
+    assert rows(engine, "SELECT external_id, donor_email FROM donations ORDER BY 1") == [
+        ("S1", None),
+        ("S2", None),
+    ]
+    assert rows(engine, "SELECT external_id, kind FROM sync_issues") == [("S2", "invalid_email")]

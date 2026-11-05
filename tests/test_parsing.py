@@ -205,3 +205,10 @@ def test_malformed_email_becomes_none_and_is_flagged_invalid(raw: str) -> None:
 
 def test_non_string_email_value_is_flagged_invalid_not_a_crash() -> None:
     assert normalize_email(5) == EmailResult(None, "5")
+
+
+@pytest.mark.parametrize("raw", ["a\ud800@b.org", "a\udfff@b.org", "\ud800@b.org"])
+def test_lone_surrogates_in_an_email_make_it_invalid_instead_of_poisoning_the_batch(
+    raw: str,
+) -> None:
+    assert normalize_email(raw).email is None

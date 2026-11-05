@@ -93,3 +93,12 @@ def test_a_stripe_currency_that_is_not_three_ascii_letters_is_still_quarantined(
     from donation_ledger.ledger import Rejection
 
     assert isinstance(map_payment_intent(payment_intent(currency=code)), Rejection)
+
+
+@pytest.mark.parametrize("bad", ["a\x00@b.com", "a\ud800@b.com", "a​@b.com"])
+def test_stripe_email_with_nul_or_surrogate_is_invalid_not_silently_rewritten_into_another_address(
+    bad: str,
+) -> None:
+    d = mapped(receipt_email=bad)
+    assert d.donor_email is None
+    assert d.invalid_email == bad

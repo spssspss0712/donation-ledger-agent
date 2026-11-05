@@ -68,7 +68,7 @@ def map_payment_intent(pi: Mapping[str, Any]) -> NewDonation | Rejection:
         currency = _currency(safe.get("currency"))
         amount = _amount(safe)
         donated_at = _created(safe.get("created"))
-        name, email = _donor(safe)
+        name, email = _donor(safe, pi)
         truncated: tuple[str, ...] = ()
         if name is not None and len(name) > MAX_NAME_LEN:
             name, truncated = name[:MAX_NAME_LEN].rstrip(), ("donor_name",)
@@ -138,7 +138,7 @@ def _created(value: Any) -> datetime:
     return moment
 
 
-def _donor(pi: Mapping[str, Any]) -> tuple[str | None, EmailResult]:
+def _donor(pi: Mapping[str, Any], raw: Mapping[str, Any]) -> tuple[str | None, EmailResult]:
     """Donor details exactly where the website puts them (SPEC 2.3).
 
     A PaymentIntent has no top-level name and no ``charges`` list, and the Charge's billing
@@ -149,7 +149,11 @@ def _donor(pi: Mapping[str, Any]) -> tuple[str | None, EmailResult]:
     name = _first_text(metadata.get("donor_name"))
     if name is not None and name.casefold() == "anonymous":
         name = None
-    return name, _email(pi.get("receipt_email"), metadata.get("donor_email"))
+    # The email is validated on the ORIGINAL value: sanitising first would strip a NUL or
+    # surrogate and could turn a malformed address into a different, valid one.
+    raw_meta = raw.get("metadata")
+    raw_meta = raw_meta if isinstance(raw_meta, Mapping) else {}
+    return name, _email(raw.get("receipt_email"), raw_meta.get("donor_email"))
 
 
 def _email(*candidates: Any) -> EmailResult:
