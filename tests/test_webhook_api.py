@@ -180,12 +180,10 @@ def test_nul_and_lone_surrogate_in_payload_do_not_break_storage(
     assert "\x00" not in name
 
 
-def test_name_and_email_are_read_from_charge_billing_details(
+def test_name_and_email_are_read_from_metadata_by_the_webhook_end_to_end(
     client: TestClient, engine: Engine
 ) -> None:
-    obj = payment_intent(
-        latest_charge={"billing_details": {"name": " Grace  Hopper ", "email": "G@X.org"}}
-    )
+    obj = payment_intent(metadata={"donor_name": " Grace  Hopper ", "donor_email": "G@X.org"})
     body = encode(event(obj))
     assert post(client, body, sign(body, FAKE_WEBHOOK_SECRET)).status_code == 200
     with engine.connect() as conn:

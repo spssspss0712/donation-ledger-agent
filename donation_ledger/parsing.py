@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
@@ -326,6 +327,47 @@ def normalize_donor_name(text: str) -> str | None:
     if len(name) > MAX_NAME_LEN:
         raise RowError("invalid_name: too long")
     return name
+
+
+MAX_EMAIL_LEN = 254  # RFC 5321 path limit
+
+
+@dataclass(frozen=True)
+class EmailResult:
+    """``email`` is the normalised address or None; ``invalid_text`` is set only when a
+    non-blank value was given but rejected (so the caller can record a warning)."""
+
+    email: str | None
+    invalid_text: str | None
+
+
+def normalize_email(value: object) -> EmailResult:
+    """Trim, lowercase, and apply the deliberately simple syntax check from SPEC 2.3.
+
+    Never raises: contact information must not stop a donation from being recorded.
+    """
+    if value is None:
+        return EmailResult(None, None)
+    if not isinstance(value, str):
+        return EmailResult(None, str(value)[: MAX_EMAIL_LEN * 2])
+    text = value.strip()
+    if is_visually_empty(text):
+        return EmailResult(None, None)
+    email = text.lower()
+    if _email_is_valid(email):
+        return EmailResult(email, None)
+    return EmailResult(None, value)
+
+
+def _email_is_valid(email: str) -> bool:
+    if len(email) > MAX_EMAIL_LEN or email.count("@") != 1:
+        return False
+    if any(ch.isspace() or unicodedata.category(ch) in ("Cc", "Cf") for ch in email):
+        return False
+    local, domain = email.split("@")
+    if not local or "." not in domain:
+        return False
+    return not (domain.startswith(".") or domain.endswith(".") or ".." in domain)
 
 
 def parse_sheet_datetime(text: str, tz_name: str, now: datetime | None = None) -> datetime:

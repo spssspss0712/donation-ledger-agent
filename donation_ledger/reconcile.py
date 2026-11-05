@@ -70,7 +70,6 @@ class StripePaymentIntentSource:
         params: Any = {
             "created": {"gte": int(created_gte.timestamp())},
             "limit": 100,
-            "expand": ["data.latest_charge"],  # billing name/email live on the charge
         }
         for pi in self._client.payment_intents.list(params=params).auto_paging_iter():
             yield pi.to_dict()

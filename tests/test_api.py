@@ -187,7 +187,7 @@ def test_webhook_and_sync_logs_do_not_contain_donor_pii(
     caplog.set_level(logging.DEBUG)
     obj = payment_intent(
         receipt_email="private.person@example.org",
-        latest_charge={"billing_details": {"name": "Private Person"}},
+        metadata={"donor_name": "Private Person"},
     )
     body = encode(event(obj))
     client.post(

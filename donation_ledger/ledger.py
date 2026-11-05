@@ -28,6 +28,9 @@ class NewDonation:
     currency: str
     donated_at: datetime
     raw_payload: dict[str, Any]
+    # Set when a non-blank email was given but is malformed (stored as NULL; a warning is
+    # recorded). Not a database column: the original text stays in raw_payload.
+    invalid_email: str | None = None
 
     def as_row(self) -> dict[str, Any]:
         return {

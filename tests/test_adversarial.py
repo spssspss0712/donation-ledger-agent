@@ -233,7 +233,7 @@ def test_stripe_payload_never_stores_the_word_anonymous_and_unknown_currency_is_
     engine: Engine, settings: Settings
 ) -> None:
     client = TestClient(create_app(settings, engine), raise_server_exceptions=False)
-    named = payment_intent(latest_charge={"billing_details": {"name": "Anonymous"}})
+    named = payment_intent(metadata={"donor_name": "Anonymous"})
     for obj in (named, payment_intent("pi_XYZ", currency="xyz")):
         body = encode(event(obj))
         hdr = {"Stripe-Signature": sign(body, FAKE_WEBHOOK_SECRET)}

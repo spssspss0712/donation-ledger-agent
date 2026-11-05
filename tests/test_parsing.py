@@ -151,3 +151,57 @@ def test_stripe_text_cleaning_removes_nul_and_lone_surrogates() -> None:
 def test_ugx_is_a_two_decimal_currency_like_stripe_treats_it() -> None:
     # Stripe's API expresses UGX amounts x100, so sheet and Stripe rows must agree.
     assert minor_units_from_decimal_string("5000", "UGX") == 500000
+
+
+# --- donor email (SPEC 2.3 "Donor email") ---------------------------------------------------
+
+from donation_ledger.parsing import EmailResult, normalize_email  # noqa: E402
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("  Ann@Example.ORG  ", "ann@example.org"),
+        ("a@b.co", "a@b.co"),
+        ("first.last+tag@sub.example.org", "first.last+tag@sub.example.org"),
+        ("\tx@y.org\n", "x@y.org"),
+        ("a" * 248 + "@b.org", "a" * 248 + "@b.org"),  # exactly 254 characters
+    ],
+)
+def test_valid_emails_are_trimmed_and_lowercased(raw: str, expected: str) -> None:
+    assert normalize_email(raw) == EmailResult(expected, None)
+
+
+@pytest.mark.parametrize("raw", ["", "   ", "\t\n", "​", None])
+def test_blank_email_is_missing_not_invalid(raw: str | None) -> None:
+    assert normalize_email(raw) == EmailResult(None, None)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "not-an-email",
+        "two@@signs.org",
+        "a@b@c.org",
+        "no space@example.org",
+        "a@exa mple.org",
+        "a@nodot",
+        "@example.org",
+        "user@",
+        "user@.org",
+        "user@example.",
+        "user@exa..mple.org",
+        "a" * 249 + "@b.org",  # 255 characters
+        "a@b.org\x00",
+        "a b@example.org",
+        "mailto:a@b.org c",
+    ],
+)
+def test_malformed_email_becomes_none_and_is_flagged_invalid(raw: str) -> None:
+    result = normalize_email(raw)
+    assert result.email is None
+    assert result.invalid_text == raw
+
+
+def test_non_string_email_value_is_flagged_invalid_not_a_crash() -> None:
+    assert normalize_email(5) == EmailResult(None, "5")

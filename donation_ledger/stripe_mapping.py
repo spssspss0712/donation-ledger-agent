@@ -2,8 +2,9 @@
 
 Field choices follow the Stripe API reference for the PaymentIntent object:
 ``id`` (pi_...), ``amount`` / ``amount_received`` (smallest unit), ``currency`` (lowercase),
-``created`` (Unix seconds). A PaymentIntent has no donor name; it is read, when present, from
-the (optionally expanded) latest charge's ``billing_details`` or from ``metadata``.
+``created`` (Unix seconds). A PaymentIntent has no top-level donor name and no ``charges``
+list: the donor name comes from ``metadata.donor_name`` and the email from ``receipt_email``
+or ``metadata.donor_email`` (both controlled by our own website).
 """
 
 from __future__ import annotations
@@ -21,9 +22,11 @@ from donation_ledger.parsing import (
     MAX_AMOUNT_MINOR,
     MAX_NAME_LEN,
     MIN_DATE,
+    EmailResult,
     RowError,
     clean_stripe_text,
     is_visually_empty,
+    normalize_email,
     strip_invisible,
 )
 
@@ -79,7 +82,8 @@ def map_payment_intent(pi: Mapping[str, Any]) -> NewDonation | Rejection:
         source=SOURCE_STRIPE,
         external_id=external_id,
         donor_name=name,
-        donor_email=email,
+        donor_email=email.email,
+        invalid_email=email.invalid_text,
         donor_address=None,
         recipient=None,
         amount_minor=amount,
@@ -130,40 +134,30 @@ def _created(value: Any) -> datetime:
     return moment
 
 
-def _donor(pi: Mapping[str, Any]) -> tuple[str | None, str | None]:
-    charge = _first_charge(pi)
-    billing = charge.get("billing_details") if charge else None
-    billing = billing if isinstance(billing, Mapping) else {}
+def _donor(pi: Mapping[str, Any]) -> tuple[str | None, EmailResult]:
+    """Donor details exactly where the website puts them (SPEC 2.3).
+
+    A PaymentIntent has no top-level name and no ``charges`` list, and the Charge's billing
+    details are normally not in the event, so they are deliberately not read.
+    """
     metadata = pi.get("metadata")
     metadata = metadata if isinstance(metadata, Mapping) else {}
-    shipping = pi.get("shipping")
-    shipping = shipping if isinstance(shipping, Mapping) else {}
-    name = _first_text(
-        billing.get("name"), metadata.get("donor_name"), metadata.get("name"), shipping.get("name")
-    )
-    email = _first_text(
-        billing.get("email"),
-        pi.get("receipt_email"),
-        metadata.get("donor_email"),
-        metadata.get("email"),
-    )
-    if name is not None and (name.casefold() == "anonymous" or len(name) > MAX_NAME_LEN):
+    name = _first_text(metadata.get("donor_name"))
+    if name is not None:
         name = None if name.casefold() == "anonymous" else name[:MAX_NAME_LEN]
-    if email is not None:
-        email = email.lower() if "@" in email and len(email) <= 320 else None
-    return name, email
+    return name, _email(pi.get("receipt_email"), metadata.get("donor_email"))
 
 
-def _first_charge(pi: Mapping[str, Any]) -> Mapping[str, Any] | None:
-    latest = pi.get("latest_charge")
-    if isinstance(latest, Mapping):
-        return latest
-    charges = pi.get("charges")  # legacy API versions
-    if isinstance(charges, Mapping):
-        data = charges.get("data")
-        if isinstance(data, list) and data and isinstance(data[0], Mapping):
-            return data[0]
-    return None
+def _email(*candidates: Any) -> EmailResult:
+    """First valid candidate wins; if none is valid, report the first malformed one."""
+    first_invalid: EmailResult | None = None
+    for candidate in candidates:
+        result = normalize_email(candidate)
+        if result.email is not None:
+            return result
+        if result.invalid_text is not None and first_invalid is None:
+            first_invalid = result
+    return first_invalid or EmailResult(None, None)
 
 
 def _first_text(*candidates: Any) -> str | None:
