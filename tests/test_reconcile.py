@@ -143,18 +143,25 @@ def test_reconciliation_fills_an_empty_email_once_and_audits_it_with_the_run_id(
     assert rows(engine, "SELECT count(*) FROM donation_contact_changes") == [(1,)]
 
 
-def test_reconciliation_never_overwrites_a_webhook_email_and_never_changes_the_amount(
+def test_reconciliation_never_overwrites_a_webhook_email_and_warns_about_the_difference(
     engine: Engine, session_factory: sessionmaker[Session]
 ) -> None:
-    process_event(
-        session_factory, event(payment_intent("pi_KEEP", amount=500, receipt_email="a@x.org"))
+    process_event(session_factory, event(payment_intent("pi_KEEP", receipt_email="a@x.org")))
+    reconcile(engine, FakeStripe([payment_intent("pi_KEEP", receipt_email="b@x.org")]))
+    assert rows(engine, "SELECT donor_email FROM donations") == [("a@x.org",)]
+    assert rows(engine, "SELECT kind FROM sync_issues") == [("contact_changed_after_sync",)]
+
+
+def test_reconciliation_never_changes_the_amount_and_does_not_fill_contacts_from_a_read_with_different_money(
+    engine: Engine, session_factory: sessionmaker[Session]
+) -> None:
+    process_event(session_factory, event(payment_intent("pi_MONEY", amount=500)))
+    res = reconcile(
+        engine, FakeStripe([payment_intent("pi_MONEY", amount=900, receipt_email="b@x.org")])
     )
-    reconcile(engine, FakeStripe([payment_intent("pi_KEEP", amount=900, receipt_email="b@x.org")]))
-    assert rows(engine, "SELECT donor_email, amount_minor FROM donations") == [("a@x.org", 500)]
-    assert sorted(str(r[0]) for r in rows(engine, "SELECT kind FROM sync_issues")) == [
-        "changed_after_sync",
-        "contact_changed_after_sync",
-    ]
+    assert rows(engine, "SELECT donor_email, amount_minor FROM donations") == [(None, 500)]
+    assert rows(engine, "SELECT kind FROM sync_issues") == [("changed_after_sync",)]
+    assert res.counters.contacts_filled == 0
 
 
 def test_reconciliation_batch_with_a_failure_after_a_fill_rolls_the_fill_back(

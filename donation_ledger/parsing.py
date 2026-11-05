@@ -362,7 +362,10 @@ def normalize_email(value: object) -> EmailResult:
 def _email_is_valid(email: str) -> bool:
     if len(email) > MAX_EMAIL_LEN or email.count("@") != 1:
         return False
-    if any(ch.isspace() or unicodedata.category(ch) in ("Cc", "Cf") for ch in email):
+    # U+FFFD marks bytes that were not valid UTF-8: storing it would be silent corruption.
+    if "\ufffd" in email or any(
+        ch.isspace() or unicodedata.category(ch) in ("Cc", "Cf") for ch in email
+    ):
         return False
     local, domain = email.split("@")
     if not local or "." not in domain:

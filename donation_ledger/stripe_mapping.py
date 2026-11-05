@@ -69,6 +69,9 @@ def map_payment_intent(pi: Mapping[str, Any]) -> NewDonation | Rejection:
         amount = _amount(safe)
         donated_at = _created(safe.get("created"))
         name, email = _donor(safe)
+        truncated: tuple[str, ...] = ()
+        if name is not None and len(name) > MAX_NAME_LEN:
+            name, truncated = name[:MAX_NAME_LEN].rstrip(), ("donor_name",)
     except RowError as exc:
         ext = external_id if isinstance(external_id, str) and len(external_id) <= 255 else None
         return Rejection(
@@ -84,6 +87,7 @@ def map_payment_intent(pi: Mapping[str, Any]) -> NewDonation | Rejection:
         donor_name=name,
         donor_email=email.email,
         invalid_email=email.invalid_text,
+        truncated=truncated,
         donor_address=None,
         recipient=None,
         amount_minor=amount,
@@ -143,8 +147,8 @@ def _donor(pi: Mapping[str, Any]) -> tuple[str | None, EmailResult]:
     metadata = pi.get("metadata")
     metadata = metadata if isinstance(metadata, Mapping) else {}
     name = _first_text(metadata.get("donor_name"))
-    if name is not None:
-        name = None if name.casefold() == "anonymous" else name[:MAX_NAME_LEN]
+    if name is not None and name.casefold() == "anonymous":
+        name = None
     return name, _email(pi.get("receipt_email"), metadata.get("donor_email"))
 
 

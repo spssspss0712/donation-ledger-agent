@@ -29,6 +29,7 @@ from donation_ledger.models import CONTACT_FIELDS, Donation, DonationContactChan
 ISSUE_CHANGED_AFTER_SYNC = "changed_after_sync"
 ISSUE_CONTACT_CHANGED = "contact_changed_after_sync"
 ISSUE_INVALID_EMAIL = "invalid_email"
+ISSUE_CONTACT_TRUNCATED = "contact_truncated"
 
 
 @dataclass
@@ -73,11 +74,25 @@ def apply_reads(
                 {"reason": "malformed_email", "digest": _digest(item.invalid_email)},
                 run_id,
             )
+        if item.truncated:
+            out.issues += record_issue(
+                session,
+                source,
+                item.external_id,
+                ISSUE_CONTACT_TRUNCATED,
+                {"fields": sorted(item.truncated)},
+                run_id,
+            )
         row = stored.get(item.external_id)
         if item.external_id in inserted or row is None:
             continue
-        if check_money:
-            out.issues += _warn_money(session, item, row, run_id)
+        changed_money = _changed_money(item, row)
+        if check_money and changed_money:
+            out.issues += _warn_money(session, item, row, changed_money, run_id)
+        if changed_money:
+            # Same ID but different money: possibly a different donation that reuses the ID.
+            # Attaching its contact details to this one could mislabel a donor, so do nothing.
+            continue
         for field in CONTACT_FIELDS:
             _apply_field(session, item, row, field, run_id, out)
     return out
@@ -93,12 +108,15 @@ def _load(session: Session, source: str, ids: list[str]) -> dict[str, Donation]:
     }
 
 
-def _warn_money(session: Session, item: NewDonation, row: Donation, run_id: int | None) -> int:
-    changed = [
+def _changed_money(item: NewDonation, row: Donation) -> list[str]:
+    return [
         f for f in ("amount_minor", "currency", "donated_at") if getattr(item, f) != getattr(row, f)
     ]
-    if not changed:
-        return 0
+
+
+def _warn_money(
+    session: Session, item: NewDonation, row: Donation, changed: list[str], run_id: int | None
+) -> int:
     detail: dict[str, Any] = {
         "changed_fields": changed,
         "stored": {f: str(getattr(row, f)) for f in changed},

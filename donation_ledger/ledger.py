@@ -31,6 +31,9 @@ class NewDonation:
     # Set when a non-blank email was given but is malformed (stored as NULL; a warning is
     # recorded). Not a database column: the original text stays in raw_payload.
     invalid_email: str | None = None
+    # Contact fields that were cut to the length limit (a warning is recorded; contact
+    # information must never stop a donation from being stored).
+    truncated: tuple[str, ...] = ()
 
     def as_row(self) -> dict[str, Any]:
         return {
